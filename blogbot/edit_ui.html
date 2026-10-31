@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>초안 수정 — blogbot</title>
+<style>
+  :root { --fg:#222; --muted:#888; --line:#e3e3e3; --bg:#fff; --card:#f8f8f8; --accent:#03c75a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e8e8; --muted:#9a9a9a; --line:#333; --bg:#161616; --card:#1f1f1f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:-apple-system,'Apple SD Gothic Neo',sans-serif; line-height:1.6; }
+  .wrap { max-width:760px; margin:0 auto; padding:0 16px 120px; }
+  header { position:sticky; top:0; z-index:5; background:var(--bg); border-bottom:1px solid var(--line);
+           padding:12px 16px; display:flex; gap:8px; align-items:center; }
+  header .count { margin-left:auto; color:var(--muted); font-size:13px; white-space:nowrap; }
+  button { font:inherit; border-radius:8px; border:1px solid var(--line); background:transparent;
+           color:inherit; padding:9px 14px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700; }
+  button:disabled { opacity:.5; }
+  label.k { display:block; font-size:13px; color:var(--muted); margin:18px 0 6px; }
+  input[type=text], textarea, select {
+    width:100%; font:inherit; color:inherit; background:var(--card); border:1px solid var(--line);
+    border-radius:8px; padding:10px 12px; }
+  textarea { resize:vertical; min-height:120px; overflow:hidden; }
+  #title { font-size:20px; font-weight:700; }
+  .sec { border:1px solid var(--line); border-radius:10px; padding:12px; margin-top:14px; }
+  .sec .meta { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .sec input { font-weight:700; margin-bottom:8px; }
+  .img { display:grid; grid-template-columns:120px 1fr; gap:10px; align-items:start;
+         border:1px dashed var(--line); border-radius:10px; padding:10px; margin-top:10px; }
+  .img img { width:120px; border-radius:6px; display:block; }
+  .img.removed { opacity:.35; }
+  .img .row { display:flex; gap:8px; margin-top:6px; flex-wrap:wrap; align-items:center; font-size:13px; }
+  .img .row select { width:auto; flex:1; min-width:150px; }
+  .note { background:#fff6e0; color:#7a5a00; border-radius:8px; padding:10px 12px; font-size:14px; margin-top:14px; }
+  @media (prefers-color-scheme: dark) { .note { background:#3a2f12; color:#f0d68a; } }
+  #msg { font-size:13px; color:var(--muted); }
+  @media (max-width:520px) { .img { grid-template-columns:1fr; } .img img { width:100%; } }
+</style>
+</head>
+<body>
+<header>
+  <button type="button" onclick="location.href='/preview/__DRAFT__/'">← 미리보기</button>
+  <button type="button" class="primary" id="saveBtn" onclick="save()">💾 저장</button>
+  <span id="msg"></span>
+  <span class="count" id="count"></span>
+</header>
+<div class="wrap">
+  <div id="pubNote" class="note" hidden></div>
+  <label class="k" for="cat">분야 (네이버 카테고리·주제 기본값을 정할 때 씀)</label>
+  <select id="cat"></select>
+  <label class="k" for="title">제목</label>
+  <input type="text" id="title">
+  <div id="sections"></div>
+  <label class="k">사진 (캡션 · 위치 · 빼기)</label>
+  <div id="images"></div>
+  <label class="k" for="tags">태그 (쉼표나 띄어쓰기로 구분)</label>
+  <input type="text" id="tags">
+  <label class="k" for="source">출처 줄</label>
+  <input type="text" id="source">
+</div>
+<script>
+const DRAFT = "__DRAFT__";
+let DATA = null, dirty = false;
+const $ = (s) => document.querySelector(s);
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function grow(el) { el.style.height = "auto"; el.style.height = (el.scrollHeight + 4) + "px"; }
+function markDirty() { dirty = true; $("#msg").textContent = "저장 안 됨"; updateCount(); }
+function updateCount() {
+  const n = [...document.querySelectorAll(".sec textarea")].reduce((a, t) => a + t.value.length, 0);
+  $("#count").textContent = `본문 ${n.toLocaleString()}자`;
+}
+function secLabel(i, h) { return i === 0 ? "도입부" : (h ? `${i}. ${h.slice(0, 18)}` : `섹션 ${i}`); }
+
+function render() {
+  $("#cat").innerHTML = `<option value="">(지정 안 됨)</option>` +
+    (DATA.categories || []).map(c => `<option${c === DATA.category ? " selected" : ""}>${esc(c)}</option>`).join("");
+  $("#cat").addEventListener("change", markDirty);
+  $("#title").value = DATA.title;
+  $("#tags").value = (DATA.tags || []).join(", ");
+  $("#source").value = DATA.source_line || "";
+  $("#sections").innerHTML = DATA.sections.map((s, i) => `
+    <div class="sec" data-i="${i}">
+      <div class="meta"><span>${i === 0 ? "도입부 (소제목 없음 권장)" : "섹션 " + i}</span><span class="n"></span></div>
+      <input type="text" class="h" placeholder="소제목 (비워 두면 소제목 없음)" value="${esc(s.heading)}">
+      <textarea class="b" placeholder="본문 (문단은 빈 줄로 구분, **굵게** 사용 가능)">${esc(s.body_md)}</textarea>
+    </div>`).join("");
+  renderImages();
+  document.querySelectorAll("textarea").forEach(t => { grow(t); t.addEventListener("input", () => { grow(t); markDirty(); }); });
+  document.querySelectorAll("input").forEach(i => i.addEventListener("input", markDirty));
+  updateCount();
+  if (DATA.published && DATA.published.url) {
+    $("#pubNote").hidden = false;
+    $("#pubNote").innerHTML = `이 글은 이미 <a href="${esc(DATA.published.url)}" target="_blank">블로그에 발행</a>되었습니다.
+      여기서 고치면 초안만 바뀌고, 이미 올라간 글은 그대로입니다. 블로그 글은 네이버에서 직접 수정하세요.`;
+  }
+}
+
+function renderImages() {
+  const heads = DATA.sections.map((s, i) => secLabel(i, s.heading));
+  $("#images").innerHTML = DATA.images.length ? DATA.images.map((m, k) => `
+    <div class="img${m.removed ? " removed" : ""}" data-k="${k}">
+      <img src="/preview/${DRAFT}/images/${esc(m.file)}" alt="">
+      <div>
+        <input type="text" class="cap" value="${esc(m.caption)}" placeholder="캡션">
+        <div class="row">
+          <span>위치:</span>
+          <select class="pos">${heads.map((h, i) => `<option value="${i}"${i === m.after_section ? " selected" : ""}>${esc(h)} 뒤</option>`).join("")}</select>
+          <label><input type="checkbox" class="rm"${m.removed ? " checked" : ""}> 빼기</label>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">${esc(m.credit)}</div>
+      </div>
+    </div>`).join("") : `<p style="color:var(--muted)">사진이 없습니다.</p>`;
+  document.querySelectorAll(".img").forEach(el => {
+    const m = DATA.images[+el.dataset.k];
+    el.querySelector(".cap").addEventListener("input", e => { m.caption = e.target.value; markDirty(); });
+    el.querySelector(".pos").addEventListener("change", e => { m.after_section = +e.target.value; markDirty(); });
+    el.querySelector(".rm").addEventListener("change", e => { m.removed = e.target.checked; el.classList.toggle("removed", m.removed); markDirty(); });
+  });
+}
+
+async function save() {
+  const sections = [...document.querySelectorAll(".sec")].map(el => ({
+    heading: el.querySelector(".h").value, body_md: el.querySelector(".b").value }));
+  const body = {
+    title: $("#title").value,
+    sections,
+    images: DATA.images.filter(m => !m.removed).map(m => ({file: m.file, caption: m.caption, after_section: m.after_section})),
+    tags: $("#tags").value,
+    source_line: $("#source").value,
+    category: $("#cat").value,
+  };
+  $("#saveBtn").disabled = true; $("#msg").textContent = "저장 중...";
+  try {
+    const r = await fetch(`/api/draft/${DRAFT}/save`, {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || "저장 실패");
+    dirty = false;
+    $("#msg").textContent = `✓ 저장됨 (${new Date().toLocaleTimeString()})`;
+  } catch (e) {
+    $("#msg").textContent = "✗ " + e.message;
+  } finally {
+    $("#saveBtn").disabled = false;
+  }
+}
+
+window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+document.addEventListener("keydown", e => { if ((e.metaKey || e.ctrlKey) && e.key === "s") { e.preventDefault(); save(); } });
+
+fetch(`/api/draft/${DRAFT}/raw`).then(r => r.json()).then(d => {
+  if (d.error) { document.body.innerHTML = `<p style="padding:20px">${esc(d.error)}</p>`; return; }
+  DATA = d; render();
+});
+</script>
+</body>
+</html>

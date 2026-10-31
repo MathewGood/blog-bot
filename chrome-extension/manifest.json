@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "blogbot",
+  "version": "0.2.0",
+  "description": "현재 웹페이지를 한글 블로그 글로 자동 변환 (로컬 blogbot 서버로 전송)",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "blogbot으로 글 만들기"
+  },
+  "permissions": ["activeTab", "scripting", "tabs"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://127.0.0.1:8765/*",
+        "http://localhost:8765/*"
+      ],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
