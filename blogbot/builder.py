@@ -30,6 +30,14 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   .notice {{ margin-top: 1.5em; color: #999; font-size: 0.8em; }}
   .tags {{ margin-top: 3em; color: #3b8; font-size: 0.9em; }}
   .source {{ margin-top: 2.5em; color: #888; font-size: 0.92em; border-top: 1px solid #eee; padding-top: 1em; }}
+  .box {{ margin: 1.6em 0; padding: 14px 18px; border-radius: 6px; line-height: 1.9; }}
+  .box.sum {{ background: #f1f8f3; border: 1px solid #b7dcc2; }}
+  .box.end {{ background: #f7f7f7; border: 1px solid #ddd; }}
+  .box .bt {{ font-weight: bold; color: #1b7a3d; margin: 0 0 6px; }}
+  .box p {{ margin: 0 0 6px; }}
+  table.dt {{ border-collapse: collapse; width: 100%; margin: 0 0 1.6em; font-size: 0.95em; line-height: 1.7; }}
+  table.dt th {{ background: #f2f2f2; border: 1px solid #ccc; padding: 8px; }}
+  table.dt td {{ border: 1px solid #ccc; padding: 8px; }}
   .copy-bar {{ text-align: center; margin-bottom: 28px; }}
   .copy-bar .guide {{ font-size: 0.95em; color: #555; margin: 0 0 14px; }}
   .copy-bar button {{ font-size: 1.1em; padding: 14px 28px; border: none; border-radius: 8px;
@@ -120,6 +128,61 @@ def clean_highlights(post: dict) -> dict:
     return out
 
 
+def _esc(s) -> str:
+    from html import escape
+    return escape(str(s or ""))
+
+
+def summary_block(post: dict) -> tuple:
+    """(html, md) — 글 맨 위 30초 요약 카드."""
+    items = [str(x).strip() for x in post.get("summary") or [] if str(x).strip()]
+    if not items:
+        return "", ""
+    marks = "①②③④⑤"
+    html = ('<div class="box sum"><p class="bt">30초 요약</p>'
+            + "".join(f"<p>{marks[i]} {_esc(t)}</p>" for i, t in enumerate(items[:5])) + "</div>")
+    md_ = "> **30초 요약**\n" + "\n".join(f"> {marks[i]} {t}" for i, t in enumerate(items[:5])) + "\n"
+    return html, md_
+
+
+def table_block(table: dict) -> tuple:
+    heads = [str(h) for h in (table or {}).get("headers") or []]
+    rows = (table or {}).get("rows") or []
+    if len(heads) < 2 or not rows:
+        return "", ""
+    check = table.get("kind") == "checklist"
+    cap = (table.get("title") or "").strip()
+    html = (f"<p>\u25bc {_esc(cap)}</p>" if cap else "") + '<table class="dt"><thead><tr>' + \
+        "".join(f"<th>{_esc(h)}</th>" for h in heads) + "</tr></thead><tbody>"
+    for r in rows:
+        html += "<tr>" + "".join(
+            f"<td>{'□ ' if check and j == 0 else ''}{_esc(c)}</td>" for j, c in enumerate(r)) + "</tr>"
+    html += "</tbody></table>"
+    md_ = (f"\n**{cap}**\n\n" if cap else "\n") + "| " + " | ".join(heads) + " |\n| " + \
+        " | ".join("---" for _ in heads) + " |\n" + "\n".join(
+            "| " + " | ".join(("□ " if check and j == 0 else "") + str(c) for j, c in enumerate(r)) + " |"
+            for r in rows) + "\n"
+    return html, md_
+
+
+def closing_block(post: dict) -> tuple:
+    c = post.get("closing") or {}
+    q = (c.get("question") or "").strip()
+    links = [l for l in c.get("links") or [] if l.get("url") and l.get("title")]
+    if not q and not links:
+        return "", ""
+    html = '<div class="box end">'
+    md_ = ""
+    if q:
+        html += f"<p>{_esc(q)}</p><p>생각이나 경험을 댓글로 남겨 주세요.</p>"
+        md_ += f"\n{q}\n생각이나 경험을 댓글로 남겨 주세요.\n"
+    if links:
+        html += '<p class="bt">함께 읽으면 좋은 글</p>' + "".join(
+            f'<p><a href="{_esc(l["url"])}" target="_blank" rel="noopener">{_esc(l["title"])}</a></p>' for l in links)
+        md_ += "\n**함께 읽으면 좋은 글**\n" + "\n".join(f"- [{l['title']}]({l['url']})" for l in links) + "\n"
+    return html + "</div>", md_
+
+
 def split_first_para(body_md: str) -> tuple:
     """본문을 (첫 문단, 나머지)로 나눈다. 강조 문구는 첫 문단 뒤에 놓는다."""
     paras = [p for p in (body_md or "").split("\n\n") if p.strip()]
@@ -139,6 +202,10 @@ def _plain_copy_text(post: dict, image_metas: list[dict]) -> str:
         imgs_by_section.setdefault(m["after_section"], []).append(m)
 
     parts = [post.get("title", "")]
+    if post.get("summary"):
+        parts.append("30초 요약\n" + "\n".join(f"{'①②③④⑤'[i]} {t}" for i, t in enumerate(post["summary"][:5])))
+    tbl = post.get("table") or {}
+    tbl_at = tbl.get("after_section", -1) if tbl else -1
     for i, sec in enumerate(post.get("sections", [])):
         if sec.get("heading", "").strip():
             parts.append(sec["heading"])
@@ -149,6 +216,14 @@ def _plain_copy_text(post: dict, image_metas: list[dict]) -> str:
         parts.append(rest)
         for m in imgs_by_section.get(i, []):
             parts.append(f"[이미지: {m.get('caption', '')}]")
+        if i == tbl_at:
+            parts.append("\n".join([" | ".join(map(str, tbl.get("headers", [])))] +
+                                   [" | ".join(map(str, r)) for r in tbl.get("rows", [])]))
+    c = post.get("closing") or {}
+    if c.get("question"):
+        parts.append(c["question"])
+    if c.get("links"):
+        parts.append("함께 읽으면 좋은 글\n" + "\n".join(f"{l['title']} {l['url']}" for l in c["links"]))
 
     source_line = (post.get("source_line") or "").strip()
     if source_line:
@@ -181,6 +256,12 @@ def build_draft(post: dict, image_metas: list[dict], draft_dir: Path) -> Path:
 
     html_parts = []
     md_parts = [f"# {post['title']}\n"]
+    sum_html, sum_md = summary_block(post)
+    if sum_html:
+        html_parts.append(sum_html)
+        md_parts.append("\n" + sum_md)
+    tbl = post.get("table") or {}
+    tbl_at = min(int(tbl.get("after_section", 0) or 0), len(post["sections"]) - 1) if tbl else -1
     for i, sec in enumerate(post["sections"]):
         if sec["heading"].strip():
             html_parts.append(f"<h2>{sec['heading']}</h2>")
@@ -208,6 +289,16 @@ def build_draft(post: dict, image_metas: list[dict], draft_dir: Path) -> Path:
                 f'</figure>'
             )
             md_parts.append(f"\n![{m['caption']}]({rel})\n*{m['caption']}*\n")
+        if i == tbl_at:
+            t_html, t_md = table_block(tbl)
+            if t_html:
+                html_parts.append(t_html)
+                md_parts.append(t_md)
+
+    c_html, c_md = closing_block(post)
+    if c_html:
+        html_parts.append(c_html)
+        md_parts.append(c_md)
 
     source_line = (post.get("source_line") or "").strip()
     if source_line:

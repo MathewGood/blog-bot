@@ -102,6 +102,12 @@ def _process(text: str, category: str, note: str = "", model: str | None = None,
                        else "✓ 교정 완료 (수정 없음)")
         except Exception as e:
             click.echo(f"⚠ 교정 건너뜀 ({e})")
+    try:
+        from . import seo
+        click.echo("🔧 검색용 구성 정리 중...")
+        post = seo.finalize(post, log=click.echo)
+    except Exception as e:
+        click.echo(f"⚠ 검색용 구성 건너뜀 ({e})")
     click.echo(f"✓ 제목: {post['title']}")
 
     draft_dir = builder.make_draft_dir(post)

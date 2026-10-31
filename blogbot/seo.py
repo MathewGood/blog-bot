@@ -1,0 +1,326 @@
+"""검색 노출·체류시간을 위한 마무리 단계 (제목 공식 · 30초 요약 · 비교표 · 질문·내부 링크 · 모바일 문단).
+
+본문이 완성된 뒤(사실 검증·교정 이후) 한 번 호출한다. 본문 사실을 새로 만들지 않고
+이미 쓰인 내용을 다시 정리해 붙이므로, 요약·표의 숫자는 본문에 있는 것만 허용한다.
+LLM 호출이 실패해도 글은 그대로 두고 문단 나누기만 적용한다(파이프라인을 멈추지 않는다).
+"""
+
+from __future__ import annotations
+
+import json
+import re
+
+from . import config
+
+TITLE_SEP = " : "
+TITLE_MAX = 52        # 제목 전체 최대 글자 수 (앵커 + 구분자 + 후킹)
+ANCHOR_RANGE = (4, 22)
+HOOK_RANGE = (8, 34)
+
+# 모바일(16px)에서 한 줄 약 22자 → 3~4줄 ≈ 90자. 문장 하나가 그보다 길면 그대로 둔다.
+PARA_MAX = 110
+PARA_TARGET = 90
+
+_NUM = re.compile(r"\d[\d,\.]*")
+
+
+# ─────────────────────────────────────────────────────────────
+# 1) 모바일 3행 분절 룰
+# ─────────────────────────────────────────────────────────────
+
+def _in_quote(s: str) -> bool:
+    return s.count("“") > s.count("”") or s.count('"') % 2 == 1
+
+
+def _plain_para(p: str) -> bool:
+    return not re.match(r"\s*([-*+>|#]|\d+[.)]\s)", p)
+
+
+def split_paragraphs(post: dict, max_len: int = PARA_MAX, target: int = PARA_TARGET) -> int:
+    """긴 문단을 문장 경계에서 나눈다(큰따옴표 대사 중간은 자르지 않는다). 나뉜 문단 수를 반환."""
+    added = 0
+    for sec in post.get("sections", []):
+        paras = [p for p in (sec.get("body_md") or "").split("\n\n") if p.strip()]
+        out: list = []
+        for p in paras:
+            p = p.strip()
+            if len(p) <= max_len or not _plain_para(p):
+                out.append(p)
+                continue
+            sents = [s for s in re.split(r"(?<=[.!?…”\"])\s+", p) if s.strip()]
+            cur = ""
+            pieces: list = []
+            for s in sents:
+                if cur and not _in_quote(cur) and (len(cur) >= target or len(cur) + 1 + len(s) > max_len):
+                    pieces.append(cur)
+                    cur = ""
+                cur += (" " if cur else "") + s
+            if cur.strip():
+                pieces.append(cur)
+            added += max(0, len(pieces) - 1)
+            out.extend(x.strip() for x in pieces)
+        sec["body_md"] = "\n\n".join(out)
+    return added
+
+
+# ─────────────────────────────────────────────────────────────
+# 2) 내부 링크 후보 — 이미 발행된 글 중 주제가 가까운 것
+# ─────────────────────────────────────────────────────────────
+
+def _norm_tag(t: str) -> str:
+    return re.sub(r"\s+", "", str(t)).lower()
+
+
+def _title_tokens(title: str) -> set:
+    return {w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", title or "") if len(w) >= 2}
+
+
+def related_posts(post: dict, limit: int = 3, drafts_dir=None) -> list:
+    """발행 완료된 이전 글 중 주제가 가까운 것 → [{title, url}]. 사연 각색 글은 제외한다.
+
+    '라이프스타일'·'건강관리'처럼 많은 글에 붙는 흔한 태그·낱말는 근거로 쓰지 않고,
+    구체적인 태그나 제목 낱말이 겹칠 때만 연결한다(엉뚱한 글 링크 방지)."""
+    from collections import Counter
+
+    root = drafts_dir or config.DRAFTS_DIR
+    pubs = []
+    for pub in root.glob("*/published.json"):
+        try:
+            url = json.loads(pub.read_text(encoding="utf-8")).get("url") or ""
+            other = json.loads((pub.parent / "post.json").read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if url and (other.get("source_line") or "").strip() != config.STORY_NOTICE:
+            pubs.append((url, other))
+    if not pubs:
+        return []
+    cut = max(3, int(len(pubs) * 0.06))     # 이보다 자주 나오는 태그·낱말은 흔한 것
+    tag_df = Counter(t for _, o in pubs for t in {_norm_tag(x) for x in o.get("tags", [])})
+    tok_df = Counter(t for _, o in pubs for t in _title_tokens(o.get("title", "")))
+    my_tags = {t for t in (_norm_tag(x) for x in post.get("tags", [])) if tag_df[t] < cut}
+    my_tokens = {t for t in _title_tokens(post.get("title", "")) if tok_df[t] < cut and len(t) >= 3}
+    cands = []
+    for url, other in pubs:
+        if other.get("title") in (post.get("title"), post.get("title_original")):
+            continue
+        tags = my_tags & {_norm_tag(t) for t in other.get("tags", [])}
+        toks = my_tokens & _title_tokens(other.get("title", ""))
+        score = 2 * len(tags) + len(toks)
+        if score >= 3:      # 구체적인 태그 2개 이상, 또는 태그 1개 + 제목 낱말 1개
+            cands.append((score, other.get("title", ""), url))
+    cands.sort(reverse=True)
+    out, seen = [], set()
+    for _, title, url in cands:
+        if url not in seen and title:
+            seen.add(url)
+            out.append({"title": title, "url": url})
+        if len(out) >= limit:
+            break
+    return out
+
+
+# ─────────────────────────────────────────────────────────────
+# 3) LLM 한 번으로 제목·요약·표·질문 생성
+# ─────────────────────────────────────────────────────────────
+
+_PROMPT = """한국 네이버 블로그(독자: {audience}) 글이 완성됐다. 검색 노출과 체류시간을 위해 아래 4가지를 만든다.
+본문에 없는 사실·숫자·고유명사는 절대 만들지 않는다. 본문에 이미 있는 내용을 다시 정리할 뿐이다.
+
+[현재 제목] {title}
+[분야] {category}
+[소재 키워드] {hint}
+[태그] {tags}
+
+[본문]
+{body}
+
+만들 것:
+1. anchor — 검색 앵커 명사구. 독자가 네이버에 실제로 입력할 만한 핵심 검색어({a0}~{a1}자).
+   본문이 다루는 대상·제도·증상·현상을 가리키는 명사구로 쓴다(예: "증여세 면제 한도", "식후 걷기 혈당", "바이낸스 해킹 사태").
+   조사·서술어로 끝내지 않는다. 따옴표·이모지 금지.
+2. hook — 클릭을 부르는 후킹 문구({h0}~{h1}자). 본문의 실제 사실(조건·숫자·대비)에서 뽑는다.
+   금지: 충격·경악·난리 같은 낚시어, 물음표 남발, "내돈내산"·"직접 써 보니" 같은 필자 경험 암시, 효과·완치 보장,
+   의약·건강 효능 단정. 불안을 자극하지 않는다.
+3. summary — '30초 요약' 3줄. 글의 핵심 결론 3가지를 각 25~60자, ~다 체로. 독자가 얻는 정보·행동 중심. 이 3줄만 읽어도 요지를 알 수 있어야 한다.
+4. table — 본문 내용을 정리한 표 1개. kind는 "compare"(비교 분석표) 또는 "checklist"(체크리스트).
+   headers 2~3개, rows 3~6행, 각 칸 40자 이내. checklist면 첫 열에 점검 항목, 둘째 열에 확인할 내용을 쓴다.
+   표에 쓰는 숫자는 반드시 본문에 있는 것만.
+5. question — 글 끝에서 독자의 의견·경험을 묻는 질문 한 문장(60자 이내, 물음표로 끝). 본문 주제와 직결되게.
+
+JSON만 출력:
+{{"anchor":"","hook":"","summary":["","",""],"table":{{"kind":"compare","title":"표 제목(20자 이내)","headers":["",""],"rows":[["",""]]}},"question":""}}"""
+
+
+def _ask(prompt: str) -> str:
+    """Haiku(없으면 Kimi)로 JSON 응답을 받는다. 실패하면 빈 문자열."""
+    import anthropic
+
+    from . import llm_guard
+
+    text = ""
+    if llm_guard.anthropic_available():
+        try:
+            client = anthropic.Anthropic(timeout=90.0, max_retries=1)
+            resp = client.messages.create(model=config.CLAUDE_MODEL, max_tokens=2500,
+                                          messages=[{"role": "user", "content": prompt}])
+            text = "".join(b.text for b in resp.content if b.type == "text")
+        except Exception as e:
+            if llm_guard.is_credit_error(e):
+                llm_guard.mark_credit_out("Anthropic 크레딧 부족")
+    if not text and config.KIMI_API_KEY:
+        from . import research
+
+        text = research._kimi_chat([{"role": "user", "content": prompt}], config.FALLBACK_MODEL,
+                                   max_tokens=2500, json_mode=True, timeout=90)
+    return text or ""
+
+
+def _body_text(post: dict, limit: int = 9000) -> str:
+    parts = []
+    for sec in post.get("sections", []):
+        if (sec.get("heading") or "").strip():
+            parts.append(f"## {sec['heading'].strip()}")
+        parts.append((sec.get("body_md") or "").strip())
+    return "\n\n".join(parts)[:limit]
+
+
+_NUMKEY = re.compile(r"(\d+(?:\.\d+)?)\s*([천만억조%배]?)")
+# 한글로 쓴 수량 표현(천만·두 배·수만 …)은 숫자 검사를 피해 가므로 본문에 같은 표현이 있을 때만 허용한다
+_KRNUM = re.compile(r"[천백]만|수[천만십백]|[두세네] ?배|[일이삼사오육칠팔구십]{1,2}만")
+
+
+def _nums(s: str) -> set:
+    """(숫자, 규모 단위) 쌍 집합. '1,216만'→('1216','만'). 쉼표는 무시한다."""
+    return {(n, u) for n, u in _NUMKEY.findall((s or "").replace(",", ""))}
+
+
+def _unsupported(text: str, body_nums: set, body: str = "") -> list:
+    """text에서 본문에 없는 숫자 목록. 단위가 붙은 숫자('1천만')는 단위까지 같아야 한다."""
+    plain = {n for n, _ in body_nums}
+    bad = [n + u for n, u in sorted(_nums(text)) if not ((n, u) in body_nums or (not u and n in plain))]
+    bad += [w for w in _KRNUM.findall(text or "") if w not in body]
+    return bad
+
+
+def _supported(text: str, body_nums: set, body: str = "") -> bool:
+    return not _unsupported(text, body_nums, body)
+
+
+def _clean(s) -> str:
+    return re.sub(r"\s+", " ", str(s or "")).strip().strip("\"'“”‘’")
+
+
+def build_title(anchor: str, hook: str) -> str:
+    anchor, hook = _clean(anchor), _clean(hook)
+    if not (ANCHOR_RANGE[0] <= len(anchor) <= ANCHOR_RANGE[1]) or not (HOOK_RANGE[0] <= len(hook) <= HOOK_RANGE[1]):
+        return ""
+    if re.search(r"[:：]", anchor + hook) or re.search(r"[\U0001F300-\U0001FAFF]", anchor + hook):
+        return ""
+    title = f"{anchor}{TITLE_SEP}{hook}"
+    return title if len(title) <= TITLE_MAX else ""
+
+
+def _validate(data: dict, body: str) -> dict:
+    """LLM 결과를 검증해 쓸 수 있는 부분만 남긴다. 키가 없으면 해당 요소는 건너뛴다."""
+    body_nums = _nums(body)
+    out: dict = {}
+    title = build_title(data.get("anchor"), data.get("hook"))
+    bad = _unsupported(title, body_nums | _nums(data.get("title_old", "")), body + data.get("title_old", "")) if title else []
+    if title and not bad:
+        out["title"] = title
+        out["anchor"] = _clean(data.get("anchor"))
+    elif bad:
+        out["_bad_title_nums"] = bad
+    summ = [_clean(x) for x in (data.get("summary") or []) if _clean(x)]
+    summ = [x for x in summ if 15 <= len(x) <= 80 and _supported(x, body_nums, body)]
+    if len(summ) >= 3:
+        out["summary"] = summ[:3]
+    t = data.get("table") or {}
+    headers = [_clean(h) for h in (t.get("headers") or []) if _clean(h)]
+    rows = []
+    for r in t.get("rows") or []:
+        cells = [_clean(c) for c in r][:len(headers)]
+        if len(cells) == len(headers) and all(cells) and all(len(c) <= 60 for c in cells) \
+                and _supported(" ".join(cells), body_nums, body):
+            rows.append(cells)
+    if 2 <= len(headers) <= 3 and len(rows) >= 3:
+        out["table"] = {"kind": "checklist" if t.get("kind") == "checklist" else "compare",
+                        "title": _clean(t.get("title"))[:30], "headers": headers, "rows": rows[:6]}
+    q = _clean(data.get("question"))
+    if 8 <= len(q) <= 80 and q.endswith("?"):
+        out["question"] = q
+    return out
+
+
+def finalize(post: dict, hint: str = "", log=None) -> dict:
+    """제목·요약·표·질문·내부 링크를 붙인 post를 돌려준다(원본은 수정하지 않고 사본 반환).
+
+    문단 나누기는 항상 적용하고, 나머지는 LLM 결과가 검증을 통과한 요소만 넣는다."""
+    emit = log or (lambda m: None)
+    post = json.loads(json.dumps(post, ensure_ascii=False))
+    n_split = split_paragraphs(post)
+    if n_split:
+        emit(f"  · 모바일 가독성: 긴 문단 {n_split}곳을 3~4줄 길이로 나눔")
+
+    body = _body_text(post)
+    aud = config.AUDIENCES.get(post.get("audience") or "women", config.AUDIENCES["women"])["label"]
+    prompt = _PROMPT.format(audience=aud, title=post.get("title", ""), category=post.get("category", ""),
+                            hint=hint or "(없음 — 본문에서 판단)", tags=", ".join(post.get("tags", [])),
+                            body=body, a0=ANCHOR_RANGE[0], a1=ANCHOR_RANGE[1], h0=HOOK_RANGE[0], h1=HOOK_RANGE[1])
+    got: dict = {}
+    feedback = ""
+    for attempt in range(3):
+        try:
+            text = _ask(prompt + feedback)
+            m = re.search(r"\{.*\}", text, re.S)
+            data = json.loads(m.group(0)) if m else {}
+        except Exception:
+            data = {}
+        data["title_old"] = post.get("title", "")
+        got = _validate(data, body)
+        missing = [k for k in ("title", "summary", "table", "question") if k not in got]
+        if not missing:
+            break
+        feedback = ("\n\n[이전 시도에서 기준을 못 맞춘 요소: " + ", ".join(missing) + "] "
+                    "숫자는 본문에 적힌 표기 그대로만 쓰고(어림·반올림·환산 금지), 본문에 없으면 숫자를 빼고 쓴다. "
+                    "글자 수 범위도 지킨다.")
+        if "title" in missing:
+            bad = got.get("_bad_title_nums")
+            feedback += (f" 제목에 쓴 숫자·수량 표현 {bad}는 본문에 없다." if bad else " 제목이 글자 수·형식 기준을 못 맞췄다.") + \
+                " 후킹 문구에는 숫자·수량 표현을 쓰지 말고, 본문의 대비·이유·조건으로 만든다."
+    got.pop("_bad_title_nums", None)
+    if not got:
+        emit("  ⚠ 검색용 구성(제목·요약·표) 생성 실패 — 문단 나누기만 적용")
+        return post
+
+    if got.get("title"):
+        post["title_original"] = post.get("title", "")
+        post["title"] = got["title"]
+        anchor_n = _norm_tag(got["anchor"])
+        tags = list(post.get("tags", []))
+        # 앵커를 담은 기존 태그를 맨 앞으로(없고 짧은 한 낱말이면 새로 추가)
+        hit = next((t for t in tags if _norm_tag(t) and _norm_tag(t) in anchor_n), None)
+        if hit:
+            tags = [hit] + [t for t in tags if t != hit]
+        elif " " not in got["anchor"] and len(anchor_n) <= 10:
+            tags = [anchor_n] + tags
+        post["tags"] = tags
+        emit(f"  ✓ 제목(앵커 + 후킹): {got['title']}")
+    else:
+        emit("  ⚠ 제목 공식 조건 불충족 — 원래 제목 유지")
+    if got.get("summary"):
+        post["summary"] = got["summary"]
+        emit("  ✓ 30초 요약 카드 3줄")
+    else:
+        emit("  ⚠ 요약 카드 생략 (본문에 없는 수치가 있거나 3줄이 안 나옴)")
+    if got.get("table"):
+        n = len(post.get("sections", []))
+        post["table"] = dict(got["table"], after_section=max(1, min(n - 2, n // 2)) if n > 2 else 0)
+        emit(f"  ✓ {'체크리스트' if got['table']['kind'] == 'checklist' else '비교 분석표'} {len(got['table']['rows'])}행 삽입")
+    else:
+        emit("  ⚠ 표 생략 (본문에 없는 수치가 있거나 행이 부족)")
+    links = related_posts(post)
+    if got.get("question") or links:
+        post["closing"] = {"question": got.get("question", ""), "links": links}
+        emit(f"  ✓ 마무리 질문 {'1개' if got.get('question') else '없음'} · 내부 링크 {len(links)}개")
+    return post

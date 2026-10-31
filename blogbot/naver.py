@@ -234,6 +234,84 @@ def section_html(sec: dict, first: bool = False) -> str:
     return "".join(parts)
 
 
+_BOX_STYLE = "background-color:#f1f8f3;border:1px solid #b7dcc2;padding:14px"
+_BOX2_STYLE = "background-color:#f7f7f7;border:1px solid #dddddd;padding:14px"
+_TH_STYLE = "background-color:#f2f2f2;border:1px solid #cccccc;padding:8px;font-size:15px;color:#222222"
+_TD_STYLE = "border:1px solid #cccccc;padding:8px;font-size:15px;color:#222222"
+
+
+def _box(inner: str, style: str = _BOX_STYLE) -> str:
+    return (f'<table style="width:100%"><tbody><tr><td style="{style}">{inner}</td></tr></tbody></table>')
+
+
+def summary_html(post: dict) -> str:
+    """글 맨 위 '30초 요약' 카드 (모바일 첫 화면에서 핵심 결론 3줄을 보여 준다)."""
+    from html import escape
+
+    items = [str(x).strip() for x in post.get("summary") or [] if str(x).strip()]
+    if not items:
+        return ""
+    marks = "①②③④⑤"
+    lines = "".join(f'<p style="{_BODY_STYLE}">{marks[i]} {escape(t)}</p>' for i, t in enumerate(items[:5]))
+    head = f'<p style="font-size:16px;color:#1b7a3d"><b>30초 요약</b></p>'
+    return _box(head + lines)
+
+
+def table_html(table: dict) -> str:
+    """본문 중반의 비교 분석표·체크리스트. 에디터가 실제 표 컴포넌트로 받아들인다."""
+    from html import escape
+
+    heads = [str(h) for h in table.get("headers") or []]
+    rows = table.get("rows") or []
+    if len(heads) < 2 or not rows:
+        return ""
+    check = table.get("kind") == "checklist"
+    th = "".join(f'<th style="{_TH_STYLE}">{escape(h)}</th>' for h in heads)
+    body = ""
+    for r in rows:
+        cells = []
+        for j, c in enumerate(r):
+            txt = ("□ " if check and j == 0 else "") + str(c)
+            cells.append(f'<td style="{_TD_STYLE}">{escape(txt)}</td>')
+        body += "<tr>" + "".join(cells) + "</tr>"
+    cap = (table.get("title") or "").strip()
+    out = _EMPTY_P
+    if cap:
+        out += f'<p style="{_BODY_STYLE}">\u25bc {escape(cap)}</p>'
+    return out + (f'<table style="border-collapse:collapse;width:100%"><thead><tr>{th}</tr></thead>'
+                  f'<tbody>{body}</tbody></table>')
+
+
+def _closing_links(post: dict) -> list:
+    c = post.get("closing") or {}
+    return [l for l in c.get("links") or [] if l.get("url") and l.get("title")]
+
+
+def closing_html(post: dict) -> str:
+    """글 끝의 질문 상자(댓글 유도). 표 칸 안에서는 링크가 걸리지 않아 관련 글은 따로 붙인다."""
+    from html import escape
+
+    q = ((post.get("closing") or {}).get("question") or "").strip()
+    if not q:
+        return ""
+    inner = (f'<p style="{_BODY_STYLE}">{escape(q)}</p>'
+             f'<p style="{_BODY_STYLE}">생각이나 경험을 댓글로 남겨 주세요.</p>')
+    return _EMPTY_P + _box(inner, _BOX2_STYLE)
+
+
+def closing_links_html(post: dict) -> str:
+    """'함께 읽으면 좋은 글' 제목 줄들. 붙여넣은 뒤 _link_paragraph()가 각 줄에 링크를 건다."""
+    from html import escape
+
+    links = _closing_links(post)
+    if not links:
+        return ""
+    out = _EMPTY_P + f'<p style="font-size:16px;color:#1b7a3d">함께 읽으면 좋은 글</p>'
+    for l in links:
+        out += f'<p style="{_BODY_STYLE}">{escape(l["title"])}</p>'
+    return out
+
+
 def footer_html(post: dict) -> str:
     from html import escape
 
@@ -689,6 +767,32 @@ def _type_html_fallback(page, html: str):
         page.keyboard.press("Enter")
 
 
+def _link_paragraph(page, frame, text: str, url: str) -> bool:
+    """본문에서 text와 같은 문단을 찾아 통째로 선택하고 링크를 건다(에디터의 링크 입력 창 사용)."""
+    try:
+        found = frame.evaluate(
+            """(t) => { const ps = [...document.querySelectorAll('.se-component.se-text p.se-text-paragraph')].reverse();
+                const p = ps.find(p => p.innerText.replace(/\\u200b/g, '').trim() === t);
+                if (!p) return false; p.setAttribute('data-bb-link', '1'); return true; }""", text)
+        if not found:
+            return False
+        frame.locator("p[data-bb-link='1']").first.click(click_count=3)
+        time.sleep(0.3)
+        frame.locator("button[data-name='text-link']").first.click()
+        frame.locator("input.se-custom-layer-link-input").first.fill(url, timeout=4000)
+        frame.locator("button.se-custom-layer-link-apply-button").first.click()
+        time.sleep(0.4)
+        ok = frame.evaluate("() => !!document.querySelector(\"p[data-bb-link='1'] .se-link\")")
+        return bool(ok)
+    except Exception:
+        return False
+    finally:
+        try:
+            frame.evaluate("() => document.querySelectorAll('[data-bb-link]').forEach(e => e.removeAttribute('data-bb-link'))")
+        except Exception:
+            pass
+
+
 def _wait_image_uploaded(frame, timeout: float = 20.0):
     """마지막 사진 컴포넌트에 실제 이미지가 붙을 때까지 대기."""
     n0 = frame.locator(".se-component.se-image").count()
@@ -906,10 +1010,16 @@ def _publish_in(ctx, page_title, post, draft_dir, auto_publish, wait_min, _emit,
         imgs_by_section.setdefault(m["after_section"], []).append(m)
 
     n_sec = len(post["sections"])
+    top = summary_html(post)
+    if top:
+        _emit("  · 30초 요약 카드 입력 중")
+        paste_html(top)
+    tbl = post.get("table") or {}
+    tbl_at = min(int(tbl.get("after_section", n_sec // 2) or 0), n_sec - 1) if tbl else -1
     for i, sec in enumerate(post["sections"]):
         _check_cancel()
         _emit(f"  · 본문 {i + 1}/{n_sec} 입력 중")
-        paste_html(section_html(sec, first=(i == 0)))
+        paste_html(section_html(sec, first=(i == 0 and not top)))
         for m in imgs_by_section.get(i, []):
             img_path = draft_dir / "images" / Path(m["file"]).name
             if not img_path.exists():
@@ -928,6 +1038,29 @@ def _publish_in(ctx, page_title, post, draft_dir, auto_publish, wait_min, _emit,
                 _emit(f"  ⚠ 이미지 업로드 실패({img_path.name}): {e}")
             # 사진 아래 새 문단으로 커서 복귀 (다음 섹션 이어 쓰기)
             _focus_end(frame)
+        if i == tbl_at:
+            h = table_html(tbl)
+            if h:
+                _emit("  · 표 입력 중")
+                paste_html(h)
+                _focus_end(frame)
+
+    # 마무리 질문 + 관련 글 링크 (출처·태그 앞)
+    tail_box = closing_html(post)
+    if tail_box:
+        _emit("  · 마무리 질문 입력 중")
+        paste_html(tail_box)
+        _focus_end(frame)
+    tail_links = closing_links_html(post)
+    if tail_links:
+        _emit("  · 관련 글 제목 입력 중")
+        paste_html(tail_links)
+        n_ok = 0
+        for l in _closing_links(post):
+            if _link_paragraph(page, frame, l["title"], l["url"]):
+                n_ok += 1
+        _emit(f"  ✓ 관련 글 링크 {n_ok}/{len(_closing_links(post))}개 연결")
+        _focus_end(frame)
 
     # 출처(구분선 + 작은 회색 글씨) · 해시태그(초록) — 미리보기와 동일
     tail = footer_html(post)

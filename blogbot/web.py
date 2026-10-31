@@ -256,7 +256,7 @@ def api_topics():
 def _run_generation(job_id: str, text: str, category: str, note: str,
                     used_model: str, do_research: bool, source_label: str = "",
                     image_provider: str = None, force_proofread: bool = False,
-                    audience: str = "women", creative: bool = False):
+                    audience: str = "women", creative: bool = False, seo_hint: str = ""):
     """조사 → 글 생성 → 이미지 선별 → 초안 저장. (스레드에서 실행)
 
     Anthropic 크레딧이 부족하면 조사·비전 선별·교정은 생략하고,
@@ -330,6 +330,17 @@ def _run_generation(job_id: str, text: str, category: str, note: str,
                     _log(job_id, "  ✓ 자료와 어긋나는 사실 없음")
             except Exception as e:
                 _log(job_id, f"  ⚠ 사실 검증 건너뜀({str(e)[:80]}) — 발행 전 수치·연도를 확인하세요")
+        # 검색 노출·체류시간 구성: 제목(앵커 + 후킹) · 30초 요약 · 표 · 질문·내부 링크 · 모바일 문단 (각색 이야기는 문단만)
+        if creative:
+            from . import seo
+            seo.split_paragraphs(post)
+        else:
+            _log(job_id, "🔧 검색용 구성 정리 중... (제목·30초 요약·표·마무리 질문·내부 링크)")
+            try:
+                from . import seo
+                post = seo.finalize(post, hint=seo_hint, log=lambda m: _log(job_id, m))
+            except Exception as e:
+                _log(job_id, f"  ⚠ 검색용 구성 건너뜀({str(e)[:80]})")
         _log(job_id, f"✓ 제목: {post['title']}")
         draft_dir = builder.make_draft_dir(post)
         provider = config.resolve_image_provider(image_provider)
@@ -421,7 +432,8 @@ def _run_topic_generation(job_id: str, query: str, category: str, note: str, use
     # 자료집이 이미 '조사 결과'이므로 추가 조사는 하지 않는다
     _run_generation(job_id, dossier, category, full_note, used_model,
                     do_research=False, source_label=f"검색어 「{query[:20]}」",
-                    image_provider=image_provider, force_proofread=force_proofread, audience=audience)
+                    image_provider=image_provider, force_proofread=force_proofread, audience=audience,
+                    seo_hint=query)
     # 수치 대조용으로 수집한 자료 목록을 초안 폴더에 남긴다 (미리보기에서만 보임)
     draft = ((JOBS.get(job_id) or {}).get("result") or {}).get("draft")
     if draft and sources:
