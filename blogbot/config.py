@@ -185,6 +185,9 @@ _DRIVE = _drive_root()
 PANN_DAILY_FILE = Path(os.getenv("PANN_DAILY_FILE", str(_DRIVE / "nate pann daily/nate-pann-daily-top10.md")))
 PANN_HOUR_FILE = Path(os.getenv("PANN_HOUR_FILE", str(_DRIVE / "nate pann hour/nate-pann-top5.md")))
 
+# 사연 각색 글 끝에 붙는 안내 (2026-10-31: 판 사연은 인물·상황을 바꿔 재미있게 다시 쓴다)
+STORY_NOTICE = "※ 온라인 커뮤니티에 올라온 사연에서 영감을 받아 인물·장소·상황을 바꿔 새로 쓴 이야기입니다. 실제 사건이 아닙니다."
+
 DRAFTS_DIR = ROOT / "drafts"
 INBOX_DIR = ROOT / "inbox"
 PROCESSED_DIR = INBOX_DIR / "processed"

@@ -256,11 +256,12 @@ def api_topics():
 def _run_generation(job_id: str, text: str, category: str, note: str,
                     used_model: str, do_research: bool, source_label: str = "",
                     image_provider: str = None, force_proofread: bool = False,
-                    audience: str = "women"):
+                    audience: str = "women", creative: bool = False):
     """조사 → 글 생성 → 이미지 선별 → 초안 저장. (스레드에서 실행)
 
     Anthropic 크레딧이 부족하면 조사·비전 선별·교정은 생략하고,
     생성은 Kimi(FALLBACK_MODEL)로 자동 전환해 작업이 멈추지 않게 한다.
+    creative=True: 사연 각색 글 — 이야기를 새로 지으므로 자료 대조 사실 검증은 하지 않는다.
     """
     from . import llm_guard
 
@@ -289,7 +290,8 @@ def _run_generation(job_id: str, text: str, category: str, note: str,
         prefix = f"{source_label} · " if source_label else ""
         _log(job_id, f"✍ {prefix}글 생성 중... (모델: {used_model})")
         post = generator.generate_post(
-            text, category, note, model=used_model, research_brief=research_brief, audience=audience
+            text, category, note, model=used_model, research_brief=research_brief, audience=audience,
+            mode="story" if creative else "feature",
         )
         if post.get("expand_skipped"):
             _log(job_id, f"  · {post['expand_skipped']}")
@@ -312,19 +314,22 @@ def _run_generation(job_id: str, text: str, category: str, note: str,
             except Exception as e:
                 _log(job_id, f"⚠ 교정 건너뜀 ({str(e)[:60]})")
 
-        # 자료 대조 사실 검증 — 자료에 없는 연도·수치·장소·기간을 고치거나 지운다
-        _log(job_id, "🔍 사실 검증 중... (글을 원문·조사 자료와 대조)")
-        try:
-            from . import factcheck
-            post, fixes = factcheck.check(post, text, research_brief)
-            if fixes:
-                _log(job_id, f"  ✓ 자료에 없는 사실 {len(fixes)}곳 수정")
-                for f in fixes[:5]:
-                    _log(job_id, f"    · {f['problem'][:70]}")
-            else:
-                _log(job_id, "  ✓ 자료와 어긋나는 사실 없음")
-        except Exception as e:
-            _log(job_id, f"  ⚠ 사실 검증 건너뜀({str(e)[:80]}) — 발행 전 수치·연도를 확인하세요")
+        # 자료 대조 사실 검증 — 자료에 없는 연도·수치·장소·기간을 고치거나 지운다 (각색 이야기는 제외)
+        if creative:
+            _log(job_id, "  · 각색 이야기라 자료 대조 사실 검증은 건너뜁니다")
+        else:
+            _log(job_id, "🔍 사실 검증 중... (글을 원문·조사 자료와 대조)")
+            try:
+                from . import factcheck
+                post, fixes = factcheck.check(post, text, research_brief)
+                if fixes:
+                    _log(job_id, f"  ✓ 자료에 없는 사실 {len(fixes)}곳 수정")
+                    for f in fixes[:5]:
+                        _log(job_id, f"    · {f['problem'][:70]}")
+                else:
+                    _log(job_id, "  ✓ 자료와 어긋나는 사실 없음")
+            except Exception as e:
+                _log(job_id, f"  ⚠ 사실 검증 건너뜀({str(e)[:80]}) — 발행 전 수치·연도를 확인하세요")
         _log(job_id, f"✓ 제목: {post['title']}")
         draft_dir = builder.make_draft_dir(post)
         provider = config.resolve_image_provider(image_provider)
@@ -384,10 +389,23 @@ def _run_topic_generation(job_id: str, query: str, category: str, note: str, use
                           audience: str = "women", story: dict = None):
     """검색어 → 자료 수집(Kimi Search Pro) → 기존 글쓰기 파이프라인. (스레드에서 실행)
 
-    story: 독자 사연의 익명 요약({"summary": ...}). 있으면 자료집 앞에 붙이고 '사연 → 해설' 구성으로 쓴다."""
+    story: 독자 사연의 익명 요약({"summary": ...}). 있으면 자료 조사 없이 사연의 뼈대로
+    인물·장면을 새로 지은 '재미있는 각색 이야기'를 쓴다(2026-10-31 사용자 지정, 해설 방식 폐지)."""
     from . import research as research_mod
     from . import stories as stories_mod
 
+    if story:
+        _log(job_id, "🎭 사연을 각색한 이야기로 씁니다 (자료 조사·사실 검증 없음)")
+        plan = stories_mod.adapt_plan(story, audience)
+        _log(job_id, "  ✓ 각색 설계(인물·장면·반전) 완성" if plan else "  ⚠ 각색 설계 실패 — 설계 없이 씁니다")
+        full_note = stories_mod.story_note(query)
+        if note:
+            full_note = f"{full_note}\n{note}".strip()
+        _run_generation(job_id, stories_mod.story_block(story) + plan, category, full_note, used_model,
+                        do_research=False, source_label=f"사연 각색 · 「{query[:20]}」",
+                        image_provider=image_provider, force_proofread=force_proofread,
+                        audience=audience, creative=True)
+        return
     try:
         _log(job_id, f"🔎 검색어 「{query}」로 자료 수집 중... (Kimi Search Pro, 보통 30초~1분)")
         dossier, sources, how = research_mod.topic_dossier(
@@ -398,15 +416,11 @@ def _run_topic_generation(job_id: str, query: str, category: str, note: str, use
         _log(job_id, f"✗ 자료 수집 실패: {str(e)[:200]}")
         _finish(job_id, "error")
         return
-    if story:
-        dossier = stories_mod.story_block(story) + "[배경 조사 자료]\n" + dossier
-        topic_instr = stories_mod.story_note(query, sources)
-    else:
-        topic_instr = research_mod.topic_note(query, sources)
+    topic_instr = research_mod.topic_note(query, sources)
     full_note = f"{topic_instr}\n{note}".strip() if note else topic_instr
     # 자료집이 이미 '조사 결과'이므로 추가 조사는 하지 않는다
     _run_generation(job_id, dossier, category, full_note, used_model,
-                    do_research=False, source_label=("독자 사연 · " if story else "") + f"검색어 「{query[:20]}」",
+                    do_research=False, source_label=f"검색어 「{query[:20]}」",
                     image_provider=image_provider, force_proofread=force_proofread, audience=audience)
     # 수치 대조용으로 수집한 자료 목록을 초안 폴더에 남긴다 (미리보기에서만 보임)
     draft = ((JOBS.get(job_id) or {}).get("result") or {}).get("draft")
