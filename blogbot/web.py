@@ -330,12 +330,12 @@ def _run_generation(job_id: str, text: str, category: str, note: str,
                     _log(job_id, "  ✓ 자료와 어긋나는 사실 없음")
             except Exception as e:
                 _log(job_id, f"  ⚠ 사실 검증 건너뜀({str(e)[:80]}) — 발행 전 수치·연도를 확인하세요")
-        # 검색 노출·체류시간 구성: 제목(앵커 + 후킹) · 30초 요약 · 표 · 질문·내부 링크 · 모바일 문단 (각색 이야기는 문단만)
+        # 검색 노출·체류시간 구성: 제목(앵커 + 후킹) · 30초 요약 · 표 · 질문 · 모바일 문단 (각색 이야기는 문단만)
         if creative:
             from . import seo
             seo.split_paragraphs(post)
         else:
-            _log(job_id, "🔧 검색용 구성 정리 중... (제목·30초 요약·표·마무리 질문·내부 링크)")
+            _log(job_id, "🔧 검색용 구성 정리 중... (제목·30초 요약·표·마무리 질문)")
             try:
                 from . import seo
                 post = seo.finalize(post, hint=seo_hint, log=lambda m: _log(job_id, m))

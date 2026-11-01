@@ -1,4 +1,4 @@
-"""검색 노출·체류시간을 위한 마무리 단계 (제목 공식 · 30초 요약 · 비교표 · 질문·내부 링크 · 모바일 문단).
+"""검색 노출·체류시간을 위한 마무리 단계 (제목 공식 · 30초 요약 · 비교표 · 질문 · 모바일 문단).
 
 본문이 완성된 뒤(사실 검증·교정 이후) 한 번 호출한다. 본문 사실을 새로 만들지 않고
 이미 쓰인 내용을 다시 정리해 붙이므로, 요약·표의 숫자는 본문에 있는 것만 허용한다.
@@ -64,63 +64,7 @@ def split_paragraphs(post: dict, max_len: int = PARA_MAX, target: int = PARA_TAR
 
 
 # ─────────────────────────────────────────────────────────────
-# 2) 내부 링크 후보 — 이미 발행된 글 중 주제가 가까운 것
-# ─────────────────────────────────────────────────────────────
-
-def _norm_tag(t: str) -> str:
-    return re.sub(r"\s+", "", str(t)).lower()
-
-
-def _title_tokens(title: str) -> set:
-    return {w for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", title or "") if len(w) >= 2}
-
-
-def related_posts(post: dict, limit: int = 3, drafts_dir=None) -> list:
-    """발행 완료된 이전 글 중 주제가 가까운 것 → [{title, url}]. 사연 각색 글은 제외한다.
-
-    '라이프스타일'·'건강관리'처럼 많은 글에 붙는 흔한 태그·낱말는 근거로 쓰지 않고,
-    구체적인 태그나 제목 낱말이 겹칠 때만 연결한다(엉뚱한 글 링크 방지)."""
-    from collections import Counter
-
-    root = drafts_dir or config.DRAFTS_DIR
-    pubs = []
-    for pub in root.glob("*/published.json"):
-        try:
-            url = json.loads(pub.read_text(encoding="utf-8")).get("url") or ""
-            other = json.loads((pub.parent / "post.json").read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if url and (other.get("source_line") or "").strip() != config.STORY_NOTICE:
-            pubs.append((url, other))
-    if not pubs:
-        return []
-    cut = max(3, int(len(pubs) * 0.06))     # 이보다 자주 나오는 태그·낱말은 흔한 것
-    tag_df = Counter(t for _, o in pubs for t in {_norm_tag(x) for x in o.get("tags", [])})
-    tok_df = Counter(t for _, o in pubs for t in _title_tokens(o.get("title", "")))
-    my_tags = {t for t in (_norm_tag(x) for x in post.get("tags", [])) if tag_df[t] < cut}
-    my_tokens = {t for t in _title_tokens(post.get("title", "")) if tok_df[t] < cut and len(t) >= 3}
-    cands = []
-    for url, other in pubs:
-        if other.get("title") in (post.get("title"), post.get("title_original")):
-            continue
-        tags = my_tags & {_norm_tag(t) for t in other.get("tags", [])}
-        toks = my_tokens & _title_tokens(other.get("title", ""))
-        score = 2 * len(tags) + len(toks)
-        if score >= 3:      # 구체적인 태그 2개 이상, 또는 태그 1개 + 제목 낱말 1개
-            cands.append((score, other.get("title", ""), url))
-    cands.sort(reverse=True)
-    out, seen = [], set()
-    for _, title, url in cands:
-        if url not in seen and title:
-            seen.add(url)
-            out.append({"title": title, "url": url})
-        if len(out) >= limit:
-            break
-    return out
-
-
-# ─────────────────────────────────────────────────────────────
-# 3) LLM 한 번으로 제목·요약·표·질문 생성
+# 2) LLM 한 번으로 제목·요약·표·질문 생성
 # ─────────────────────────────────────────────────────────────
 
 _PROMPT = """한국 네이버 블로그(독자: {audience}) 글이 완성됐다. 검색 노출과 체류시간을 위해 아래 4가지를 만든다.
@@ -253,7 +197,7 @@ def _validate(data: dict, body: str) -> dict:
 
 
 def finalize(post: dict, hint: str = "", log=None) -> dict:
-    """제목·요약·표·질문·내부 링크를 붙인 post를 돌려준다(원본은 수정하지 않고 사본 반환).
+    """제목·요약·표·질문을 붙인 post를 돌려준다(원본은 수정하지 않고 사본 반환).
 
     문단 나누기는 항상 적용하고, 나머지는 LLM 결과가 검증을 통과한 요소만 넣는다."""
     emit = log or (lambda m: None)
@@ -319,8 +263,9 @@ def finalize(post: dict, hint: str = "", log=None) -> dict:
         emit(f"  ✓ {'체크리스트' if got['table']['kind'] == 'checklist' else '비교 분석표'} {len(got['table']['rows'])}행 삽입")
     else:
         emit("  ⚠ 표 생략 (본문에 없는 수치가 있거나 행이 부족)")
-    links = related_posts(post)
-    if got.get("question") or links:
-        post["closing"] = {"question": got.get("question", ""), "links": links}
-        emit(f"  ✓ 마무리 질문 {'1개' if got.get('question') else '없음'} · 내부 링크 {len(links)}개")
+    if got.get("question"):
+        post["closing"] = {"question": got["question"]}
+        emit("  ✓ 마무리 질문 1개")
+    else:
+        emit("  ⚠ 마무리 질문 생략")
     return post

@@ -168,18 +168,12 @@ def table_block(table: dict) -> tuple:
 def closing_block(post: dict) -> tuple:
     c = post.get("closing") or {}
     q = (c.get("question") or "").strip()
-    links = [l for l in c.get("links") or [] if l.get("url") and l.get("title")]
-    if not q and not links:
+    if not q:
         return "", ""
     html = '<div class="box end">'
     md_ = ""
-    if q:
-        html += f"<p>{_esc(q)}</p><p>생각이나 경험을 댓글로 남겨 주세요.</p>"
-        md_ += f"\n{q}\n생각이나 경험을 댓글로 남겨 주세요.\n"
-    if links:
-        html += '<p class="bt">함께 읽으면 좋은 글</p>' + "".join(
-            f'<p><a href="{_esc(l["url"])}" target="_blank" rel="noopener">{_esc(l["title"])}</a></p>' for l in links)
-        md_ += "\n**함께 읽으면 좋은 글**\n" + "\n".join(f"- [{l['title']}]({l['url']})" for l in links) + "\n"
+    html += f"<p>{_esc(q)}</p><p>생각이나 경험을 댓글로 남겨 주세요.</p>"
+    md_ += f"\n{q}\n생각이나 경험을 댓글로 남겨 주세요.\n"
     return html + "</div>", md_
 
 
@@ -220,8 +214,6 @@ def _plain_copy_text(post: dict, image_metas: list[dict]) -> str:
     c = post.get("closing") or {}
     if c.get("question"):
         parts.append(c["question"])
-    if c.get("links"):
-        parts.append("함께 읽으면 좋은 글\n" + "\n".join(f"{l['title']} {l['url']}" for l in c["links"]))
     if post.get("summary"):
         parts.append("30초 요약\n" + "\n".join(f"{'①②③④⑤'[i]} {t}" for i, t in enumerate(post["summary"][:5])))
 
