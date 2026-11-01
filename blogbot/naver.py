@@ -245,7 +245,7 @@ def _box(inner: str, style: str = _BOX_STYLE) -> str:
 
 
 def summary_html(post: dict) -> str:
-    """글 맨 위 '30초 요약' 카드 (모바일 첫 화면에서 핵심 결론 3줄을 보여 준다)."""
+    """글 맨 끝(출처 앞) '30초 요약' 카드 (핵심 결론 3줄)."""
     from html import escape
 
     items = [str(x).strip() for x in post.get("summary") or [] if str(x).strip()]
@@ -1010,16 +1010,12 @@ def _publish_in(ctx, page_title, post, draft_dir, auto_publish, wait_min, _emit,
         imgs_by_section.setdefault(m["after_section"], []).append(m)
 
     n_sec = len(post["sections"])
-    top = summary_html(post)
-    if top:
-        _emit("  · 30초 요약 카드 입력 중")
-        paste_html(top)
     tbl = post.get("table") or {}
     tbl_at = min(int(tbl.get("after_section", n_sec // 2) or 0), n_sec - 1) if tbl else -1
     for i, sec in enumerate(post["sections"]):
         _check_cancel()
         _emit(f"  · 본문 {i + 1}/{n_sec} 입력 중")
-        paste_html(section_html(sec, first=(i == 0 and not top)))
+        paste_html(section_html(sec, first=(i == 0)))
         for m in imgs_by_section.get(i, []):
             img_path = draft_dir / "images" / Path(m["file"]).name
             if not img_path.exists():
@@ -1060,6 +1056,13 @@ def _publish_in(ctx, page_title, post, draft_dir, auto_publish, wait_min, _emit,
             if _link_paragraph(page, frame, l["title"], l["url"]):
                 n_ok += 1
         _emit(f"  ✓ 관련 글 링크 {n_ok}/{len(_closing_links(post))}개 연결")
+        _focus_end(frame)
+
+    # 30초 요약 카드 — 글의 맨 마지막 내용 (출처·태그 앞)
+    tail_sum = summary_html(post)
+    if tail_sum:
+        _emit("  · 30초 요약 카드 입력 중")
+        paste_html(tail_sum)
         _focus_end(frame)
 
     # 출처(구분선 + 작은 회색 글씨) · 해시태그(초록) — 미리보기와 동일

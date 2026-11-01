@@ -134,7 +134,7 @@ def _esc(s) -> str:
 
 
 def summary_block(post: dict) -> tuple:
-    """(html, md) — 글 맨 위 30초 요약 카드."""
+    """(html, md) — 글 맨 끝(출처 앞) 30초 요약 카드."""
     items = [str(x).strip() for x in post.get("summary") or [] if str(x).strip()]
     if not items:
         return "", ""
@@ -202,8 +202,6 @@ def _plain_copy_text(post: dict, image_metas: list[dict]) -> str:
         imgs_by_section.setdefault(m["after_section"], []).append(m)
 
     parts = [post.get("title", "")]
-    if post.get("summary"):
-        parts.append("30초 요약\n" + "\n".join(f"{'①②③④⑤'[i]} {t}" for i, t in enumerate(post["summary"][:5])))
     tbl = post.get("table") or {}
     tbl_at = tbl.get("after_section", -1) if tbl else -1
     for i, sec in enumerate(post.get("sections", [])):
@@ -224,6 +222,8 @@ def _plain_copy_text(post: dict, image_metas: list[dict]) -> str:
         parts.append(c["question"])
     if c.get("links"):
         parts.append("함께 읽으면 좋은 글\n" + "\n".join(f"{l['title']} {l['url']}" for l in c["links"]))
+    if post.get("summary"):
+        parts.append("30초 요약\n" + "\n".join(f"{'①②③④⑤'[i]} {t}" for i, t in enumerate(post["summary"][:5])))
 
     source_line = (post.get("source_line") or "").strip()
     if source_line:
@@ -256,10 +256,6 @@ def build_draft(post: dict, image_metas: list[dict], draft_dir: Path) -> Path:
 
     html_parts = []
     md_parts = [f"# {post['title']}\n"]
-    sum_html, sum_md = summary_block(post)
-    if sum_html:
-        html_parts.append(sum_html)
-        md_parts.append("\n" + sum_md)
     tbl = post.get("table") or {}
     tbl_at = min(int(tbl.get("after_section", 0) or 0), len(post["sections"]) - 1) if tbl else -1
     for i, sec in enumerate(post["sections"]):
@@ -299,6 +295,10 @@ def build_draft(post: dict, image_metas: list[dict], draft_dir: Path) -> Path:
     if c_html:
         html_parts.append(c_html)
         md_parts.append(c_md)
+    sum_html, sum_md = summary_block(post)
+    if sum_html:
+        html_parts.append(sum_html)
+        md_parts.append("\n" + sum_md)
 
     source_line = (post.get("source_line") or "").strip()
     if source_line:
