@@ -111,7 +111,7 @@ def _too_similar(query: str, used: list) -> bool:
 
 # ─────────────────────────────────────────────────────────────
 # 소재 발굴
-#  · 독자 사연 대기열은 가장 후순위 — 트렌드·NYT 글을 먼저 발행하고 맨 끝에 붙인다(트렌드 몫에서 차감, 2026-11-03 사용자 지정).
+#  · 독자 사연 대기열은 가장 후순위 — 트렌드·NYT 글이 요청 편수에 모자랄 때만 그 부족분을 맨 끝에 채운다(2026-11-03 사용자 지정).
 #  · 트렌드 글(80%): 구글 4시간 1~20위(활성 항목만·모든 카테고리·관련성순)에서 한국 5 : 미국 3 : 일본 2.
 #    한국은 다음 실시간과 겹친 이슈를 먼저 쓰고, 모자라면 한국 구글 상위로 채운다(2026-10-30 사용자 지정).
 #  · NYT 글(20%): 뉴욕타임스 피드에서 고른 글감
@@ -334,7 +334,7 @@ def discover_topics(n: int, categories: list, audience: str = "women", fill: boo
         raise RuntimeError("소재 선별에 KIMI_API_KEY가 필요합니다.")
     used, seen_q = used_titles(), []
     trend_n, nyt_n = split_counts(n)
-    # 사용자가 대기열에 넣어 둔 독자 사연은 몫만 차지하고, 발행 순서는 맨 끝이다 (트렌드 몫에서 차감)
+    # 독자 사연은 트렌드·NYT 소재가 모자랄 때만 쓴다 (아래에서 부족분만 채움)
     from . import pann_feed, stories
 
     # 구글 드라이브의 네이트 판 인기글 파일에서 새 글을 가져와 대기열에 넣는다(이미 본 글은 건너뜀)
@@ -346,16 +346,21 @@ def discover_topics(n: int, categories: list, audience: str = "women", fill: boo
     # 직접 넣은 사연이 먼저, 판 출신은 1회 최대 MAX_PER_RUN편
     queue = [] if only_stories else [s for s in stories.all_items() if not s.get("pann_id")]
     queue += [s for s in stories.all_items() if s.get("pann_id")][:pann_feed.MAX_PER_RUN]
-    story_items = []
-    for st in queue[:trend_n]:
-        story_items.append({"category": st["category"], "query": st["query"], "angle": st.get("angle", ""),
-                            "trend": "", "source": SRC_STORY, "story_id": st["id"]})
-        seen_q.append(st["query"])
-    trend_n -= len(story_items)
+
+    def story_items_for(k: int) -> list:
+        out = []
+        for st in queue[:k]:
+            out.append({"category": st["category"], "query": st["query"], "angle": st.get("angle", ""),
+                        "trend": "", "source": SRC_STORY, "story_id": st["id"]})
+            seen_q.append(st["query"])
+        return out
+
     if only_stories:
-        log(f"독자: {config.AUDIENCES[audience]['label']} | 판 인기글 사연 {len(story_items)}편 (트렌드·NYT 제외)")
-        return {"primary": story_items[:n], "spare": []}
-    log(f"독자: {config.AUDIENCES[audience]['label']} | 독자 사연 {len(story_items)}편 + 트렌드 글 {trend_n}편 + NYT 글 {nyt_n}편")
+        items = story_items_for(n)
+        log(f"독자: {config.AUDIENCES[audience]['label']} | 판 인기글 사연 {len(items)}편 (트렌드·NYT 제외)")
+        return {"primary": items[:n], "spare": []}
+    log(f"독자: {config.AUDIENCES[audience]['label']} | 트렌드 글 {trend_n}편 + NYT 글 {nyt_n}편 "
+        f"(모자라면 독자 사연 {len(queue)}편 대기 중에서 채움)")
 
     trend_items = []
     if trend_n:
@@ -423,6 +428,7 @@ def discover_topics(n: int, categories: list, audience: str = "women", fill: boo
     total = len(primary) + len(n_main)
     for j, it in enumerate(n_main):        # NYT 글은 중간중간 고르게 끼워 넣는다
         primary.insert(min(len(primary), int(round((j + 1) * total / (len(n_main) + 1)))), it)
+    story_items = story_items_for(max(0, n - len(primary)))   # 트렌드·NYT가 모자란 만큼만 사연으로 채운다
     primary += story_items                 # 독자 사연은 가장 후순위 — 맨 끝에 배치
     log(f"소재 확정: 독자 사연 {len(story_items)}개 + 트렌드 {len(t_main)}개 + NYT {len(n_main)}개 (요청 {n}편)")
     return {"primary": primary, "spare": t_spare + n_spare}
