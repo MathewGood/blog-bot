@@ -9,7 +9,8 @@
   1. 글 번호(URL의 /talk/<번호>): 한 번 본 글은 대기열에 넣었든 건너뛰었든 다시 보지 않는다(pann_seen.json).
   2. 제목: 번호가 달라도 제목이 같은 재게시는 건너뛴다.
   3. 주제: 익명 요약한 주제문이 이미 쓴 글·대기열 사연과 비슷하면 건너뛴다.
-원문은 저장하지 않는다 — 대기열에는 익명 요약과 주제문만 들어가고, 글에는 원문 문장·닉네임·주소를 쓰지 않는다.
+원문 전체는 저장하지 않는다 — 대기열에는 익명 요약·주제문·사회적 쟁점과, 원문에서 확인된 짧은 발췌문(식별 정보는 ○○로 가림)만 들어간다.
+글은 이 발췌문을 인용하고 사회적 관점의 생각을 덧붙이는 해설 칼럼이다(각색 이야기가 아님, 2026-11-03).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ MAX_ANALYZE = 8       # 한 번 가져올 때 Kimi로 요약해 보는 새 글 �
 MAX_QUEUED = 6        # 판 출신 사연이 대기열에 동시에 쌓일 수 있는 수
 STALE_H = 48          # 대기열에서 이만큼 묵은 판 사연은 정리
 MIN_GAP_MIN = 90      # 자동 작성 사이 최소 간격(분) — 2시간 주기에서 약간의 여유
+MIN_EXCERPTS = 2      # 원문에서 확인된 발췌문이 이보다 적으면 해설 글감으로 쓰지 않는다
 MAX_PER_RUN = 3       # 자동 예약 1회에서 판 출신 사연이 차지할 수 있는 최대 편수(직접 넣은 사연은 제한 없음)
 _LOCK = threading.Lock()
 
@@ -130,8 +132,8 @@ def sync(log=None, max_analyze: int = MAX_ANALYZE) -> dict:
         log("  · 판 인기글 파일을 읽지 못했습니다 — " + "; ".join(res["errors"]))
     # 대기열에서 이틀 넘게 묵은 판 사연은 버린다(이미 한 번 본 글이라 다시 들어오지 않는다)
     for s in stories.all_items():
-        if s.get("pann_id") and time.time() - s.get("added", 0) > STALE_H * 3600:
-            stories.remove(s["id"])
+        if s.get("pann_id") and (time.time() - s.get("added", 0) > STALE_H * 3600 or "excerpts" not in s):
+            stories.remove(s["id"])      # 묵은 것, 그리고 발췌 방식 도입 전에 요약만 해 둔 것
     with _LOCK:
         st = _load()
         seen, titles = st["seen"], st["titles"]
@@ -171,6 +173,11 @@ def sync(log=None, max_analyze: int = MAX_ANALYZE) -> dict:
             except Exception as ex:
                 log(f"  · 판 {e['id']} 요약 실패({str(ex)[:50]}) — 다음에 다시 시도")
                 res["left"] += 1
+                continue
+            if len(info.get("excerpts") or []) < MIN_EXCERPTS:
+                seen[e["id"]] = {"t": int(time.time()), "status": "skip", "why": "발췌할 만한 대목이 부족"}
+                res["skipped"] += 1
+                log(f"  · 판 {e['id']} 제외: 원문에서 확인된 발췌문 {len(info.get('excerpts') or [])}개")
                 continue
             if used is None:
                 used = autopilot.used_titles() + [s["query"] for s in stories.all_items()]

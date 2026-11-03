@@ -256,12 +256,14 @@ def api_topics():
 def _run_generation(job_id: str, text: str, category: str, note: str,
                     used_model: str, do_research: bool, source_label: str = "",
                     image_provider: str = None, force_proofread: bool = False,
-                    audience: str = "women", creative: bool = False, seo_hint: str = ""):
+                    audience: str = "women", creative: bool = False, seo_hint: str = "",
+                    gen_mode: str = "", excerpts: list = None, source_ref: str = ""):
     """조사 → 글 생성 → 이미지 선별 → 초안 저장. (스레드에서 실행)
 
     Anthropic 크레딧이 부족하면 조사·비전 선별·교정은 생략하고,
     생성은 Kimi(FALLBACK_MODEL)로 자동 전환해 작업이 멈추지 않게 한다.
     creative=True: 사연 각색 글 — 이야기를 새로 지으므로 자료 대조 사실 검증은 하지 않는다.
+    gen_mode='pann': 판 인기글 — 발췌문(excerpts)을 인용 블록으로 넣고 사회적 관점으로 해설한다. source_ref는 출처 주소.
     """
     from . import llm_guard
 
@@ -291,7 +293,7 @@ def _run_generation(job_id: str, text: str, category: str, note: str,
         _log(job_id, f"✍ {prefix}글 생성 중... (모델: {used_model})")
         post = generator.generate_post(
             text, category, note, model=used_model, research_brief=research_brief, audience=audience,
-            mode="story" if creative else "feature",
+            mode=gen_mode or ("story" if creative else "feature"),
         )
         if post.get("expand_skipped"):
             _log(job_id, f"  · {post['expand_skipped']}")
@@ -313,6 +315,13 @@ def _run_generation(job_id: str, text: str, category: str, note: str,
                 _log(job_id, "⚠ 교정 생략 (Anthropic 크레딧 부족) — 발행 전 오타를 직접 확인하세요")
             except Exception as e:
                 _log(job_id, f"⚠ 교정 건너뜀 ({str(e)[:60]})")
+
+        # 판 인기글: 교정이 인용문을 고쳐 쓰지 않았는지 확인해 원본 발췌문으로 되돌린다
+        if gen_mode == "pann":
+            from . import stories as stories_mod
+            fixed, dropped, kept = stories_mod.restore_excerpts(post, excerpts or [])
+            _log(job_id, f"  ✓ 발췌문 {kept}/{len(excerpts or [])}개 본문 인용 (원문 복구 {fixed}곳 · 지어낸 인용 삭제 {dropped}곳)")
+            post["source_line"] = (config.PANN_NOTICE + (f" 출처: {source_ref}" if source_ref else "")).strip()
 
         # 자료 대조 사실 검증 — 자료에 없는 연도·수치·장소·기간을 고치거나 지운다 (각색 이야기는 제외)
         if creative:
@@ -405,6 +414,18 @@ def _run_topic_generation(job_id: str, query: str, category: str, note: str, use
     from . import research as research_mod
     from . import stories as stories_mod
 
+    if story and stories_mod.is_commentary(story):
+        ex = story.get("excerpts") or []
+        _log(job_id, f"📰 판 인기글을 발췌({len(ex)}개)하고 사회적 관점으로 해설합니다 (자료 조사·각색 없음)")
+        full_note = stories_mod.commentary_note(query, bool(ex))
+        if note:
+            full_note = f"{full_note}\n{note}".strip()
+        _run_generation(job_id, stories_mod.commentary_block(story), category, full_note, used_model,
+                        do_research=False, source_label=f"판 인기글 해설 · 「{query[:20]}」",
+                        image_provider=image_provider, force_proofread=force_proofread,
+                        audience=audience, creative=True, gen_mode="pann", excerpts=ex,
+                        source_ref=story.get("ref", ""))
+        return
     if story:
         _log(job_id, "🎭 사연을 각색한 이야기로 씁니다 (자료 조사·사실 검증 없음)")
         plan = stories_mod.adapt_plan(story, audience)

@@ -116,12 +116,18 @@ def _story_mode() -> bool:
     return getattr(_AUD, "mode", "feature") == "story"
 
 
+def _pann_mode() -> bool:
+    """판 인기글 — 사연을 일부 발췌해 사회적 관점으로 해설하는 글(각색 이야기가 아님)."""
+    return getattr(_AUD, "mode", "feature") == "pann"
+
+
 def _style_text() -> str:
     """문체 가이드. 사연 각색 모드면 각색용 가이드로 통째로 바꾸고,
     직장인 독자면 페르소나·독자 원칙 부분만 직장인용으로 바꾼다."""
-    if _story_mode():
+    if _story_mode() or _pann_mode():
         who, hint = _STORY_AUD.get(_audience(), _STORY_AUD["women"])
-        text = (config.ROOT / "prompts" / "story_adapt.md").read_text(encoding="utf-8")
+        fname = "pann_commentary.md" if _pann_mode() else "story_adapt.md"
+        text = (config.ROOT / "prompts" / fname).read_text(encoding="utf-8")
         return text.replace("{독자결}", hint).replace("{독자}", who)
     style = config.STYLE_GUIDE.read_text(encoding="utf-8")
     if _audience() == "worker":
@@ -134,6 +140,9 @@ def _style_text() -> str:
 def _system_prompt() -> str:
     style = _style_text()
     intro = ("당신은 한국의 개인 블로거를 대신해 글을 쓰는 대필 작가입니다.\n"
+             "온라인 커뮤니티 사연의 일부를 인용하고, 그 사연을 사회적 관점에서 해설하는 칼럼을 씁니다.\n"
+             if _pann_mode() else
+             "당신은 한국의 개인 블로거를 대신해 글을 쓰는 대필 작가입니다.\n"
              "사연 요약을 뼈대로 받아, 인물과 장면을 새로 지은 재미있는 각색 이야기로 씁니다.\n"
              if _story_mode() else
              "당신은 한국의 개인 블로거를 대신해 글을 쓰는 대필 작가입니다.\n"
@@ -180,6 +189,21 @@ def body_chars(post: dict) -> int:
 
 
 def _expand_prompt(post: dict, research_brief: str | None) -> str:
+    if _pann_mode():
+        return f"""아래는 방금 쓴 사연 해설 칼럼의 JSON이다. 분량이 목표({TARGET_BODY_CHARS})에 미치지 못한다. 현재 본문 {body_chars(post)}자.
+
+같은 글감·같은 문체(~다 체, 의견은 "~라고 본다")를 유지하면서 {TARGET_BODY_CHARS}로 늘려라.
+- 인용 블록(`> `로 시작하는 문단)은 한 글자도 바꾸거나 새로 만들지 않는다. 늘리는 것은 **필자의 해설 문단**이다.
+- 늘리는 재료는 **양쪽 입장의 사정, 구조·관행·세대·인식의 차이 읽기, 누구나 겪는 일반적 사례(통계 없이)와 비유, 필자의 생각, 작은 변화 제안**이다.
+- 문단은 새 문단을 추가해 채우고, 문단 하나는 2문장·70~110자로 짧게 끊는다.
+- 같은 내용을 되풀이하거나 요약으로 늘리지 않는다. 통계·연구·기관·실존 인물·브랜드·사연에 없는 사실은 넣지 않는다.
+- 제목·슬러그·이미지 계획·source_line(빈 문자열)은 바꾸지 않는다. 첫·마지막 섹션 heading은 빈 문자열, 중간 섹션의 highlight는 12~30자 ~다 체 숫자 없이.
+
+같은 JSON 스키마로 전체 글을 다시 출력하라.
+
+<current_post>
+{json.dumps(post, ensure_ascii=False)}
+</current_post>"""
     if _story_mode():
         return f"""아래는 방금 쓴 각색 이야기의 JSON이다. 분량이 목표({TARGET_BODY_CHARS})에 미치지 못한다. 현재 본문 {body_chars(post)}자.
 
@@ -244,14 +268,17 @@ def generate_post(*args, audience: str = "women", mode: str = "feature", **kwarg
     """글 생성 + 강조 문구 보정(본 생성이 기준을 어긴 섹션만 짧게 다시 쓴다).
 
     audience: 'women'(40~65세 여성, 기본) | 'worker'(40~65세 직장인).
-    mode: 'feature'(기사·자료 기반 해설) | 'story'(사연을 각색한 읽을거리 — 자료 없이 이야기를 새로 짓는다)."""
+    mode: 'feature'(기사·자료 기반 해설) | 'story'(사연을 각색한 읽을거리 — 자료 없이 이야기를 새로 짓는다)
+    | 'pann'(판 인기글 — 사연 일부를 발췌하고 사회적 관점으로 해설)."""
     audience = audience if audience in config.AUDIENCES else "women"
     _AUD.v = audience
-    _AUD.mode = mode if mode in ("feature", "story") else "feature"
+    _AUD.mode = mode if mode in ("feature", "story", "pann") else "feature"
     try:
         post = _generate_post(*args, **kwargs)
         post["audience"] = audience
-        if _story_mode():
+        if _pann_mode():
+            post["source_line"] = config.PANN_NOTICE
+        elif _story_mode():
             post["source_line"] = config.STORY_NOTICE
             _split_long_paragraphs(post)
         try:
@@ -391,7 +418,7 @@ def _expand_if_short(post: dict, selected_model: str, research_brief: str | None
     """목표 분량에 못 미치면 같은 모델로 한 번 더 늘린다. 실패하면 원본을 그대로 쓴다."""
     started_at = body_chars(post)
     # 각색 글은 자료가 짧은 게 정상이고 지어낼 사실도 없으므로 자료 길이와 무관하게 확장한다
-    if (not _story_mode() and material_chars is not None and material_chars < MIN_MATERIAL_FOR_EXPAND
+    if (not (_story_mode() or _pann_mode()) and material_chars is not None and material_chars < MIN_MATERIAL_FOR_EXPAND
             and started_at < MIN_BODY_CHARS):
         post["expand_skipped"] = (f"자료 {material_chars:,}자로 부족 — 사실 오류를 막기 위해 "
                                   f"분량 확장 생략 (본문 {started_at:,}자)")
@@ -511,6 +538,10 @@ def _generate_with_kimi(
     style = _style_text()
     schema_text = json.dumps(POST_SCHEMA, ensure_ascii=False, indent=2)
     intro = ("당신은 한국의 개인 블로거를 대신해 글을 쓰는 대필 작가입니다.\n"
+             "온라인 커뮤니티 사연의 일부를 인용하고, 그 사연을 사회적 관점에서 해설하는 칼럼을 씁니다. "
+             "AI가 쓴 티가 전혀 나지 않아야 합니다.\n"
+             if _pann_mode() else
+             "당신은 한국의 개인 블로거를 대신해 글을 쓰는 대필 작가입니다.\n"
              "사연 요약을 뼈대로 받아, 인물과 장면을 새로 지은 재미있는 각색 이야기로 씁니다. "
              "AI가 쓴 티가 전혀 나지 않아야 합니다.\n"
              if _story_mode() else
