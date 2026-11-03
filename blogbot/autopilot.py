@@ -284,7 +284,7 @@ def _pick(cands: list, used: list, cats: list, want: int, audience: str, kind: s
         "아래 '이미 쓴 글'과 겹치지 마라.\n"
         f"분야 키: {cat_names}.\n\n[후보]\n{lines}\n\n[이미 쓴 글]\n" + "\n".join(f"- {t}" for t in used[:40]) +
         '\n\nJSON만 출력: {"topics":[{"trend":"원래 키워드 또는 기사 제목","category":"분야키","query":"주제문",'
-        '"angle":"독자에게 닿는 관점 한 줄"}]}')
+        '"angle":"돈과 자본의 흐름 관점 한 줄(누가 얻고 누가 지불하나, 돈이 어디로 가는가)"}]}')
     text = research._kimi_chat([{"role": "user", "content": prompt}], config.FALLBACK_MODEL,
                                max_tokens=3000, json_mode=True, timeout=120)
     m = re.search(r"\{.*\}", text, re.S)

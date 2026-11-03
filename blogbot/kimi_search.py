@@ -66,13 +66,13 @@ def _headers() -> dict:
 
 # 분야별 공신력 도메인(sites 지정용, API 한도 5개). 역사는 최신성·기관 제한이 맞지 않아 두지 않는다.
 TRUSTED_SITES = {
-    "경제": ["bok.or.kr", "kostat.go.kr", "moef.go.kr", "kdi.re.kr", "oecd.org"],
+    "경제": ["bok.or.kr", "kostat.go.kr", "moef.go.kr", "imf.org", "oecd.org"],
     "라이프": ["kdca.go.kr", "mohw.go.kr", "nhis.or.kr", "who.int", "kostat.go.kr"],
     "AI·테크": ["msit.go.kr", "nia.or.kr", "oecd.org", "nature.com", "iea.org"],
     "사회·문화": ["kostat.go.kr", "mohw.go.kr", "mogef.go.kr", "kihasa.re.kr", "oecd.org"],
 }
 # 분야별 자료 최신성(일). 역사는 기간 제한 없음.
-RECENT_DAYS = {"경제": 730, "라이프": 1095, "AI·테크": 730, "사회·문화": 1095}
+RECENT_DAYS = {"경제": 365, "라이프": 730, "AI·테크": 365, "사회·문화": 730}
 
 
 def time_window(days: int):

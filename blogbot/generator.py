@@ -134,7 +134,10 @@ def _style_text() -> str:
         a, b = style.index("## 페르소나"), style.index("## 잡지 피처의 문법")
         worker = (config.ROOT / "prompts" / "audience_worker.md").read_text(encoding="utf-8")
         style = style[:a] + worker + "\n" + style[b:]
-    return style
+    # 트렌드·뉴스 해설은 돈과 자본의 흐름으로 원인·전망을 분석한다
+    money = (config.ROOT / "prompts" / "money_lens.md").read_text(encoding="utf-8")
+    who = _STORY_AUD.get(_audience(), _STORY_AUD["women"])[0]
+    return style + "\n" + money.replace("{독자}", who)
 
 
 def _system_prompt() -> str:
@@ -228,6 +231,7 @@ def _expand_prompt(post: dict, research_brief: str | None) -> str:
 - <research> 자료에서 아직 쓰지 않은 통계·연구·사례·인물을 더 가져와 새 문단을 만든다.
 - 구체적인 장면·숫자·비교를 추가한다 (잡지 피처처럼 읽히게).
 - 필요하면 섹션을 1~2개 더 만든다. 한국 관련 섹션은 2개 이상 유지한다.
+- 늘리는 방향은 **돈의 흐름 분석**이다: 누가 비용을 내고 누가 얻는지, 규모·비중의 비교, 앞으로의 시나리오(조건부), 가계에 닿는 의미. 전망은 단정하지 않는다.
 
 금지:
 - 같은 내용을 다른 말로 반복하거나, 앞 내용을 요약하는 문단 추가
@@ -623,6 +627,7 @@ def _generate_with_kimi(
     text = "".join(chunks)
     if not text.strip():
         raise RuntimeError("Kimi 스트림에서 본문을 받지 못했습니다.")
+    text = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text)   # 모델이 코드펜스로 감싸 보낸 경우
     try:
         post = json.loads(text)
     except json.JSONDecodeError as e:
