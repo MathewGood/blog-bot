@@ -111,7 +111,7 @@ def _too_similar(query: str, used: list) -> bool:
 
 # ─────────────────────────────────────────────────────────────
 # 소재 발굴
-#  · 독자 사연 대기열이 있으면 가장 먼저(트렌드 몫에서 차감).
+#  · 독자 사연 대기열은 가장 후순위 — 트렌드·NYT 글을 먼저 발행하고 맨 끝에 붙인다(트렌드 몫에서 차감, 2026-11-03 사용자 지정).
 #  · 트렌드 글(80%): 구글 4시간 1~20위(활성 항목만·모든 카테고리·관련성순)에서 한국 5 : 미국 3 : 일본 2.
 #    한국은 다음 실시간과 겹친 이슈를 먼저 쓰고, 모자라면 한국 구글 상위로 채운다(2026-10-30 사용자 지정).
 #  · NYT 글(20%): 뉴욕타임스 피드에서 고른 글감
@@ -334,7 +334,7 @@ def discover_topics(n: int, categories: list, audience: str = "women", fill: boo
         raise RuntimeError("소재 선별에 KIMI_API_KEY가 필요합니다.")
     used, seen_q = used_titles(), []
     trend_n, nyt_n = split_counts(n)
-    # 사용자가 대기열에 넣어 둔 독자 사연이 먼저 쓰인다 (트렌드 몫에서 차감)
+    # 사용자가 대기열에 넣어 둔 독자 사연은 몫만 차지하고, 발행 순서는 맨 끝이다 (트렌드 몫에서 차감)
     from . import pann_feed, stories
 
     # 구글 드라이브의 네이트 판 인기글 파일에서 새 글을 가져와 대기열에 넣는다(이미 본 글은 건너뜀)
@@ -419,10 +419,11 @@ def discover_topics(n: int, categories: list, audience: str = "women", fill: boo
 
     t_main, t_spare = trend_items[:trend_n], trend_items[trend_n:]
     n_main, n_spare = nyt_items[:nyt_n], nyt_items[nyt_n:]
-    primary = story_items + list(t_main)
+    primary = list(t_main)
     total = len(primary) + len(n_main)
     for j, it in enumerate(n_main):        # NYT 글은 중간중간 고르게 끼워 넣는다
         primary.insert(min(len(primary), int(round((j + 1) * total / (len(n_main) + 1)))), it)
+    primary += story_items                 # 독자 사연은 가장 후순위 — 맨 끝에 배치
     log(f"소재 확정: 독자 사연 {len(story_items)}개 + 트렌드 {len(t_main)}개 + NYT {len(n_main)}개 (요청 {n}편)")
     return {"primary": primary, "spare": t_spare + n_spare}
 
