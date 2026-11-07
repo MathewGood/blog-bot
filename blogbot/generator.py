@@ -55,7 +55,7 @@ POST_SCHEMA = {
         },
         "images": {
             "type": "array",
-            "description": "삽입할 이미지 5~6개. 섹션 사이에 고르게 배치한다.",
+            "description": "삽입할 이미지 4개(최대 4개). 섹션 사이에 고르게 배치한다.",
             "items": {
                 "type": "object",
                 "properties": {

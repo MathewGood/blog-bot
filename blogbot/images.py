@@ -178,6 +178,16 @@ def _section_context(post: dict, idx: int) -> str:
     return post.get("title", "")
 
 
+def limit_plans(plans: list, n: int = None) -> list:
+    """사진 계획이 상한(config.MAX_IMAGES)보다 많으면 글 전체에 고르게 퍼지도록 n장만 고른다."""
+    n = n or config.MAX_IMAGES
+    if len(plans) <= n:
+        return plans
+    plans = sorted(plans, key=lambda x: x.get("after_section", 0))
+    idx = sorted({round(i * (len(plans) - 1) / (n - 1)) for i in range(n)}) if n > 1 else [0]
+    return [plans[i] for i in idx]
+
+
 def fetch_images_for_post(post: dict, draft_dir: Path, log=None, provider: str = None) -> list:
     """post['images'] 계획대로 사진을 준비한다. 결과 메타 리스트 반환.
 
@@ -187,7 +197,7 @@ def fetch_images_for_post(post: dict, draft_dir: Path, log=None, provider: str =
     """
     img_dir = draft_dir / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
-    plans = list(post.get("images", []))
+    plans = limit_plans(list(post.get("images", [])))
     provider = config.resolve_image_provider(provider)
 
     def _emit(msg: str):

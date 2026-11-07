@@ -97,6 +97,9 @@ HISTORY_USE_WIKIMEDIA = os.getenv("HISTORY_USE_WIKIMEDIA", "1") != "0"
 # 사진 공급원: openai(AI 생성) | stock(Pexels/Unsplash 무료 사진). 키가 없으면 stock으로.
 # 무료 사진 검색 보강 (키는 무료 가입으로 발급)
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "")
+# 글 한 편에 들어가는 사진 수 상한 (생성 계획이 더 많아도 고르게 골라 이 수까지만 만든다)
+MAX_IMAGES = 4
+
 # Cloudflare Workers AI — 하루 10,000 뉴런 무료 ≈ FLUX-1-schnell 약 150장
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
