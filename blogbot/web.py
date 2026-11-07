@@ -825,8 +825,8 @@ _PUBLISH_BAR = """<div id="nvbar" style="position:sticky;top:0;z-index:50;backgr
   function done(url){
     btn.textContent = '✓ 발행됨 · 블로그 글 보기';
     btn.style.background = '#1a73e8'; btn.disabled = false;
-    btn.onclick = function(){ window.open(url, '_blank'); };
-    msg.innerHTML = '<a href="' + url + '" target="_blank">' + url + '</a> · ' +
+    btn.onclick = function(){ window.open(url, 'blogbotBlog'); };
+    msg.innerHTML = '<a href="' + url + '" target="blogbotBlog">' + url + '</a> · ' +
       '<a href="#" id="nvAgain" style="color:#999">다시 발행</a>';
     document.getElementById('nvAgain').onclick = function(e){ e.preventDefault();
       if (confirm('이미 발행한 글입니다. 같은 글을 한 번 더 발행할까요?')) start(true); };
