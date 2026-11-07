@@ -1327,6 +1327,21 @@ def api_autopilot_start():
         return jsonify({"error": naver.LOGIN_HELP}), 400
     if not config.NAVER_BLOG_ID:
         return jsonify({"error": "NAVER_BLOG_ID가 설정돼 있지 않습니다."}), 400
+    first_at = None
+    raw_at = str(data.get("first_at") or "").strip()
+    if raw_at:       # 첫 예약 시각 직접 지정 (브라우저 datetime-local: 2026-11-07T21:30)
+        import datetime as _dt
+        try:
+            first_at = _dt.datetime.fromisoformat(raw_at)
+        except ValueError:
+            return jsonify({"error": "첫 예약 시각 형식이 올바르지 않습니다."}), 400
+        now = _dt.datetime.now()
+        earliest = autopilot.first_slot(0)
+        if first_at < earliest:
+            return jsonify({"error": f"첫 예약 시각은 지금보다 최소 {autopilot.MIN_LEAD_MIN}분 뒤여야 합니다 "
+                                     f"(가장 빠른 시각 {earliest:%m/%d %H:%M})."}), 400
+        if first_at > now + _dt.timedelta(days=14):
+            return jsonify({"error": "첫 예약 시각은 14일 이내로 지정하세요."}), 400
     used_model = config.enforce_model(config.MODEL)
     image_provider = data.get("images")
     try:
@@ -1338,6 +1353,7 @@ def api_autopilot_start():
             start_in_min=int(data.get("start_in_min") or autopilot.DEFAULT_START_MIN),
             audience=data.get("audience") or None,
             fill=bool(data.get("fill")),
+            first_at=first_at,
         )
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 409

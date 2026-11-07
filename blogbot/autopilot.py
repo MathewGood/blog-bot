@@ -113,14 +113,14 @@ def _too_similar(query: str, used: list) -> bool:
 # 소재 발굴
 #  · 독자 사연 대기열은 가장 후순위 — 트렌드·NYT 글이 요청 편수에 모자랄 때만 그 부족분을 맨 끝에 채운다(2026-11-03 사용자 지정).
 #  · 트렌드 글(80%): 구글 4시간 1~20위(활성 항목만·모든 카테고리·관련성순)에서 한국 5 : 미국 3 : 일본 2.
-#    한국은 다음 실시간과 겹친 이슈를 먼저 쓰고, 모자라면 한국 구글 상위로 채운다(2026-10-30 사용자 지정).
+#    한국은 구글 1~20위와 다음 실시간 키워드의 합집합에서 고른다. 양쪽에 오른 이슈는 우선 고려(2026-11-07 사용자 지정, 이전엔 교집합 우선).
 #  · NYT 글(20%): 뉴욕타임스 피드에서 고른 글감
 # ─────────────────────────────────────────────────────────────
 
 TREND_TOP = 20
 TREND_HOURS = 4
 NYT_SHARE = 0.2
-SRC_BOTH, SRC_GOOGLE, SRC_NYT = "구글·다음 겹침", "구글(보충)", "NYT"
+SRC_BOTH, SRC_GOOGLE, SRC_DAUM, SRC_NYT = "구글·다음 겹침", "구글", "다음", "NYT"
 SRC_STORY = "독자 사연"
 FOREIGN_GEOS = {"JP": "일본", "US": "미국"}
 # 트렌드 글의 나라별 비율 (2026-10-30 사용자 지정 한국 5 : 미국 3 : 일본 2)
@@ -260,12 +260,15 @@ def _pick(cands: list, used: list, cats: list, want: int, audience: str, kind: s
     who = _AUD_DESC[audience]
     if kind == "trend":
         lines = "\n".join(
-            f"{FOREIGN_GEOS.get(c.get('geo'), '한국')} {c['rank']}위 | {c['term']} | 다음 실시간: {c.get('daum', '-')} | 관련: "
-            f"{' / '.join(c.get('news') or c['related'])[:160]}" for c in cands)
+            (f"한국(다음 실시간) {c['rank']}위 | {c['term']} | 관련: {' / '.join(c.get('news') or [])[:160]}"
+             if c.get("daum_only") else
+             f"{FOREIGN_GEOS.get(c.get('geo'), '한국')}(구글) {c['rank']}위 | {c['term']} | 다음 실시간: {c.get('daum', '-')} | 관련: "
+             f"{' / '.join(c.get('news') or c['related'])[:160]}") for c in cands)
         head = (f"아래는 구글 트렌드(한국·일본·미국, 4시간 기준) 급상승 검색어다. **이 목록 안에서만** 블로그 글 소재를 골라라"
                 f"(최대 {want}개, 한 키워드는 한 번만). 독자에게 맞지 않는 키워드는 억지로 쓰지 말고 건너뛰어라 — 개수가 모자라도 된다. "
                 "나라 구분 없이 순위가 높은 것을 우선하되, 일본·미국 키워드는 한국 독자가 읽을 만한 이슈일 때만 고르고 "
-                "일본어·영어 키워드는 뜻을 풀어 한국어 주제문으로 써라.\n"
+                "일본어·영어 키워드는 뜻을 풀어 한국어 주제문으로 써라. 한국 키워드는 구글과 다음 실시간 두 목록의 합집합이며, "
+                "'다음 실시간' 칸에 값이 있는 구글 키워드는 두 곳에서 동시에 뜬 이슈이므로 우선 고려하라. 같은 이슈를 가리키는 키워드는 한 번만 골라라.\n"
                 "스포츠(경기·선수·구단 이슈)도 소재로 쓴다 — 경기 결과 속보를 옮기지 말고 팬·직장인의 생활, 지역 경제, 문화 현상 같은 "
                 "관점의 주제문으로 바꾸고, 분야 키는 society(사회·문화)로 둔다.\n"
                 "건너뛸 것: 연예인 사생활·가십, 정당 간 정치 공방, 사건사고 속보, 특정 종목 투자 권유, "
@@ -380,19 +383,31 @@ def discover_topics(n: int, categories: list, audience: str = "women", fill: boo
         quota = split_geo(trend_n)
         log("트렌드 글 나라별 몫: " + ", ".join(f"{GEO_LABEL[g]} {quota[g]}편" for g in GEO_ORDER))
         picked = {g: [] for g in GEO_ORDER}
-        # 한국: 다음 실시간과 겹친 이슈를 먼저, 몫이 모자라면 겹치지 않은 한국 구글 상위로 채운다
-        if both and quota["KR"]:
-            picked["KR"] = _clean(_pick(both, used, cats, quota["KR"] + 2, audience, "trend"),
-                                  cats, used, seen_q, SRC_BOTH)
-        if len(picked["KR"]) < quota["KR"]:
-            both_ranks = {b_["rank"] for b_ in both}
-            rest = [g for g in google if g["rank"] not in both_ranks]
-            for g in rest:
+        # 한국: 구글 1~20위 ∪ 다음 실시간(합집합)에서 고른다. 양쪽에 오른 이슈는 후보에 표시해 우선 고려하게 한다
+        if quota["KR"]:
+            both_by_rank = {b_["rank"]: b_ for b_ in both}
+            matched_daum = {b_["daum"] for b_ in both}
+            pool = [both_by_rank.get(g["rank"], g) for g in google]
+            for g in pool:
                 g["geo"] = "KR"
-            more = _clean(_pick(rest, used, cats, quota["KR"] - len(picked["KR"]) + 2, audience, "trend"),
-                          cats, used, seen_q, SRC_GOOGLE)
-            picked["KR"] += more
-            log(f"  · 한국 겹침이 {len(both)}개뿐이라 구글 상위에서 {len(more)}개 더 골랐습니다")
+            daum_only = [{"rank": d["rank"], "term": d["term"], "related": [], "news": d.get("news") or [],
+                          "geo": "KR", "daum_only": True} for d in daum if d["term"] not in matched_daum]
+            pool += daum_only
+            log(f"한국 후보 합집합 {len(pool)}개 (구글 {len(google)} + 다음 단독 {len(daum_only)}, 그중 양쪽 {len(both)})")
+            origin = {x["term"]: (SRC_DAUM if x.get("daum_only") else SRC_BOTH if x.get("daum") else SRC_GOOGLE) for x in pool}
+
+            def kr_label(t):
+                if t in origin:
+                    return origin[t]
+                for k, v in origin.items():
+                    if k and (k in t or t in k):
+                        return v
+                return SRC_GOOGLE
+
+            picked["KR"] = _clean(_pick(pool, used, cats, quota["KR"] + 2, audience, "trend"),
+                                  cats, used, seen_q, kr_label)
+            n_src = {x: sum(1 for p_ in picked["KR"] if p_["source"] == x) for x in (SRC_BOTH, SRC_GOOGLE, SRC_DAUM)}
+            log("  · 한국 소재 출처: " + ", ".join(f"{k} {v}개" for k, v in n_src.items()))
         for geo in ("US", "JP"):
             cands = [f for f in foreign if f["geo"] == geo]
             if cands and quota[geo]:
@@ -467,11 +482,12 @@ def slot_for(i: int, start: dt.datetime, step: int, last: dt.datetime = None) ->
 
 def start(count: int, categories: list, generate_fn, publish_fn, interval: int = DEFAULT_INTERVAL,
           start_in_min: int = DEFAULT_START_MIN, audience: str = None, fill: bool = False,
-          only_stories: str = "") -> dict:
+          only_stories: str = "", first_at: dt.datetime = None) -> dict:
     """백그라운드로 시작한다. generate_fn(query, category, angle, audience) → draft 이름,
     publish_fn(draft 이름, 예약 시각) → None (실패 시 예외).
 
-    audience: 생략하면 지금 시각으로 정한다(06~09시·18~22시 직장인, 그 외 여성)."""
+    audience: 생략하면 지금 시각으로 정한다(06~09시·18~22시 직장인, 그 외 여성).
+    first_at: 첫 글의 예약 시각을 직접 지정(10분 격자로 올림). 없으면 지금부터 start_in_min 뒤."""
     audience = audience if audience in config.AUDIENCES else config.audience_for()
     count = max(1, min(int(count), MAX_COUNT))
     interval = max(GRID_MIN, int(interval))
@@ -484,7 +500,7 @@ def start(count: int, categories: list, generate_fn, publish_fn, interval: int =
                       "audience": config.AUDIENCES[audience]["label"], "fill": bool(fill),
                       "only_stories": only_stories})
     STOP.clear()
-    t0 = first_slot(start_in_min)
+    t0 = ceil_grid(first_at, GRID_MIN) if first_at else first_slot(start_in_min)
     threading.Thread(target=_run, args=(count, categories, generate_fn, publish_fn, interval, t0, audience, fill, only_stories),
                      daemon=True).start()
     return {"first_slot": t0.strftime("%m/%d %H:%M"), "count": count, "interval": interval,
@@ -503,8 +519,8 @@ def _run(count, categories, generate_fn, publish_fn, interval, t0, audience="wom
         if not topics and only_stories:
             raise RuntimeError("새로 쓸 판 인기글 사연이 없습니다 (이미 쓴 글·사연이 아닌 글·중복은 제외됨).")
         if not topics:
-            raise RuntimeError("조건에 맞는 소재가 없습니다 (구글 4시간 1~20위와 다음 실시간 트렌드가 겹치는 이슈 중 "
-                               "독자에게 맞는 것이 없음). '겹침이 부족하면 구글 상위로 보충'을 켜면 채울 수 있습니다.")
+            raise RuntimeError("조건에 맞는 소재가 없습니다 (구글 4시간 1~20위와 다음 실시간 트렌드 합집합 중 "
+                               "독자에게 맞는 것이 없음).")
         n = len(topics)
         if n < count:
             _log(f"⚠ 조건에 맞는 소재가 {n}개뿐이라 {n}편만 진행합니다 (요청 {count}편)")

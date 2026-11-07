@@ -362,18 +362,27 @@
   <section class="panel" id="panel-auto">
     <div class="card">
       <h3>소재 찾기 + 13분 간격 예약 발행</h3>
-      <p>② 탭 <b>💬 사연으로 쓰기</b>의 대기열에 넣어 둔 사연이 있으면 가장 먼저 쓰입니다. 소재의 80%는 <b>구글 트렌드(4시간·활성 항목만·관련성순) 1~20위</b>에서 <b>한국 5 : 미국 3 : 일본 2</b> 비율로 고릅니다(한국은 다음 실시간과 겹친 이슈 우선). 20%는 <b>뉴욕타임스</b> 글감입니다.
-         독자는 시작한 시각으로 정해집니다 — 06~09시·18~22시는 <b>40~65세 직장인</b>, 그 외는 <b>40~65세 여성</b>. 글·사진을 만들고, 네이버 <b>예약 발행</b>으로 평균 13분 간격(네이버가 분을 10분 단위로만 받아 10·20분 간격이 섞임)에 한 편씩 올라가게 등록합니다.
+      <p>소재의 80%는 <b>구글 트렌드(4시간·활성 항목만·관련성순) 1~20위</b>에서 <b>한국 5 : 미국 3 : 일본 2</b> 비율로 고릅니다(한국은 구글 1~20위와 <b>다음 실시간 키워드의 합집합</b>에서 고르며, 양쪽에 오른 이슈를 우선 고려). 20%는 <b>뉴욕타임스</b> 글감입니다.
+         트렌드·NYT 글이 모자랄 때만 ② 탭 <b>💬 사연으로 쓰기</b> 대기열의 사연이 맨 끝에 채워집니다.
+         독자는 아래에서 고릅니다 — <b>자동</b>이면 시작한 시각으로 정해집니다(06~09시·18~22시 직장인, 그 외 여성). 글·사진을 만들고, 네이버 <b>예약 발행</b>으로 평균 13분 간격(네이버가 분을 10분 단위로만 받아 10·20분 간격이 섞임)에 한 편씩 올라가게 등록합니다.
          사람 확인 없이 진행되며, 등록 후에는 Mac이 꺼져도 예약 시각에 발행됩니다.</p>
       <div class="row" style="margin-top:8px">
         <label class="chk">편수 <input type="number" id="apCount" value="6" min="1" max="20" style="width:64px"></label>
         <label class="chk">첫 예약
           <select id="apStart"><option value="20">약 20분 뒤</option><option value="30">약 30분 뒤</option>
             <option value="60">약 1시간 뒤</option><option value="120">약 2시간 뒤</option></select></label>
+        <label class="chk">또는 직접 지정 <input type="datetime-local" id="apFirstAt" step="600"></label>
+        <button class="ghost" type="button" onclick="document.getElementById('apFirstAt').value=''">지정 해제</button>
+        <label class="chk">독자
+          <select id="apAudience"><option value="">자동 (시간대별)</option>
+            <option value="women">40~65세 여성</option><option value="worker">40~65세 직장인</option></select></label>
+      </div>
+      <div class="row" style="margin-top:4px">
+        <span class="muted">첫 예약 시각을 직접 고르면 위의 '약 N분 뒤'보다 우선합니다(10분 단위로 올림, 지금부터 15분 뒤~14일 이내). 이후 글은 평균 13분 간격으로 이어집니다.</span>
       </div>
       <div class="row" id="apCats" style="margin-top:8px"></div>
       <div class="row" style="margin-top:8px">
-        <span class="muted">트렌드 글은 한국 5 : 미국 3 : 일본 2 비율이며, 한국 몫은 다음과 겹친 이슈를 먼저 쓰고 모자라면 한국 구글 상위로 채웁니다.</span>
+        <span class="muted">트렌드 글은 한국 5 : 미국 3 : 일본 2 비율이며, 한국 몫은 구글 상위 20개와 다음 실시간의 합집합에서 고릅니다.</span>
       </div>
       <div class="row" style="margin-top:10px">
         <button class="act" id="apStartBtn" onclick="autopilotStart()">▶ 시작</button>
@@ -537,7 +546,15 @@ function callExtension(payload, timeoutMs = 180000) {
 // 탭
 
 const AP_CATS = {life:"라이프", economy:"경제", society:"사회·문화", history:"역사", tech:"AI·테크"};
+function apInitFirstAt() {
+  const el = $("#apFirstAt");
+  if (!el) return;
+  const d = new Date(Date.now() + 20 * 60000), p = n => String(n).padStart(2, "0");
+  d.setMinutes(Math.ceil(d.getMinutes() / 10) * 10, 0, 0);
+  el.min = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function apInitCats() {
+  apInitFirstAt();
   const box = $("#apCats");
   if (!box || box.dataset.ready) return;
   box.dataset.ready = "1";
@@ -548,6 +565,7 @@ async function autopilotStart() {
   const cats = [...document.querySelectorAll(".apCat:checked")].map(x => x.value);
   const r = await fetch("/api/autopilot", {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({count: +$("#apCount").value, categories: cats, start_in_min: +$("#apStart").value,
+                          first_at: $("#apFirstAt").value || "", audience: $("#apAudience").value || "",
                           fill: true})});
   const d = await r.json();
   if (d.error) { alert(d.error); return; }
