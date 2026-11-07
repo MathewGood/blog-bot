@@ -665,11 +665,19 @@ async function loadStatus() {
   const kb = c.kimi_balance;
   const kimiLabel = kb == null ? "" :
     `<span><span class="dot ${kb >= 2 ? "ok" : "bad"}"></span>Kimi $${kb}${kb < 2 ? " (충전 필요)" : ""}</span>`;
+  const ps = c.provider_status || {};
+  const provLabel = (key, name) => {
+    const st = ps[key];
+    if (!st || st.ok) return "";
+    const msg = st.kind === "auth" ? `${name} 키 오류` : `${name} 크레딧 부족`;
+    return `<span title="${st.reason || ""}"><span class="dot bad"></span>${msg} ` +
+      `<a href="#" onclick="resetProvider('${key}');return false" style="font-size:11px">충전함</a></span>`;
+  };
   const naverOk = !!(c.naver_session && c.naver_session.ok);
   $("#statusBar").innerHTML =
     `<span title="${an.reason || ""}"><span class="dot ${claudeOk ? "ok" : "bad"}"></span>${claudeLabel}` +
       (an.ok === false ? ` <a href="#" onclick="recheckClaude();return false" style="font-size:11px">재확인</a>` : "") +
-    `</span>` + kimiLabel +
+    `</span>` + kimiLabel + provLabel("openai", "OpenAI") + provLabel("cloudflare", "Cloudflare") +
     `<span><span class="dot ${c.pexels_key ? "ok" : "bad"}"></span>이미지</span>` +
     `<span><span class="dot ${c.news_login ? "ok" : "bad"}"></span>뉴스로그인</span>` +
     `<span><span class="dot ${c.naver_blog_id ? "ok" : "bad"}"></span>네이버(${c.naver_blog_id || "미설정"})</span>` +
@@ -713,6 +721,11 @@ async function loadStatus() {
 }
 
 // Anthropic 충전 후 즉시 재확인 (차단기 해제)
+async function resetProvider(name) {
+  await fetch("/api/provider-reset", { method: "POST", headers: {"Content-Type": "application/json"},
+                                       body: JSON.stringify({ name }) });
+  loadStatus();
+}
 async function recheckClaude() {
   const r = await (await fetch("/api/anthropic-recheck", { method: "POST" })).json();
   alert(r.ok ? "✓ Claude API 정상 — 다시 Claude로 생성합니다."

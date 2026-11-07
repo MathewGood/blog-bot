@@ -225,6 +225,10 @@ def fetch_images_for_post(post: dict, draft_dir: Path, log=None, provider: str =
     for engine in engines:
         if len(results) >= len(plans):
             break
+        from . import llm_guard
+        if llm_guard.provider_blocked(engine):
+            _emit(f"  ⚠ {llm_guard.provider_status(engine)['reason']} — {engine} 건너뜀 (다음 방식으로)")
+            continue
         results.update(_ai_fill(post, plans, img_dir, results, engine, _emit))
 
     for i, plan in enumerate(plans):

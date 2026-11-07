@@ -69,3 +69,60 @@ def check_and_raise(exc: Exception):
             "platform.claude.com → Billing에서 충전하세요."
         ) from exc
     raise exc
+
+
+# ─────────────────────────────────────────────────────────────
+# 이미지 API(OpenAI·Cloudflare) 크레딧/한도/키 오류 감지
+#  - 잔액 조회 API가 없으므로, 실제 호출이 한도 오류로 실패했을 때 상태를 기록한다.
+#  - 크레딧 부족이면 쿨다운 동안 해당 엔진 호출을 건너뛰고 다음 방식으로 넘어간다.
+# ─────────────────────────────────────────────────────────────
+
+PROVIDER_LABEL = {"openai": "OpenAI", "cloudflare": "Cloudflare"}
+_PROVIDER_COOLDOWN = {"credit": 1800, "auth": 600}   # 초
+_prov: dict = {}   # name -> {"kind": "credit"|"auth", "until": ts, "reason": str, "at": ts}
+
+
+def classify_provider_error(status_code: int, text: str) -> str:
+    """HTTP 오류를 'credit'(크레딧·한도 소진) / 'auth'(키 오류) / ''(그 외)로 분류."""
+    t = (text or "").lower()
+    if "insufficient_quota" in t or "billing_hard_limit" in t or "exceeded your current quota" in t:
+        return "credit"
+    if status_code in (402, 429) and any(k in t for k in ("credit", "quota", "neurons", "allocation")):
+        return "credit"
+    if status_code in (401, 403):
+        return "auth"
+    return ""
+
+
+def note_provider_error(name: str, status_code: int, text: str) -> str:
+    """실패 응답을 기록한다. 분류 결과('credit'/'auth'/'')를 돌려준다."""
+    kind = classify_provider_error(status_code, text)
+    if kind:
+        now = time.time()
+        label = PROVIDER_LABEL.get(name, name)
+        reason = (f"{label} 크레딧(한도) 소진" if kind == "credit" else f"{label} API 키 오류")
+        with _lock:
+            _prov[name] = {"kind": kind, "until": now + _PROVIDER_COOLDOWN[kind],
+                           "reason": reason, "at": now}
+    return kind
+
+
+def note_provider_ok(name: str):
+    with _lock:
+        _prov.pop(name, None)
+
+
+def provider_blocked(name: str) -> bool:
+    """크레딧 부족·키 오류로 쿨다운 중이면 True."""
+    with _lock:
+        st = _prov.get(name)
+        return bool(st and time.time() < st["until"])
+
+
+def provider_status(name: str) -> dict:
+    with _lock:
+        st = _prov.get(name)
+        if st and time.time() < st["until"]:
+            return {"ok": False, "kind": st["kind"], "reason": st["reason"],
+                    "blocked_sec": int(st["until"] - time.time())}
+    return {"ok": True, "kind": "", "reason": "", "blocked_sec": 0}

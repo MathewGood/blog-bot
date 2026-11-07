@@ -19,7 +19,7 @@ from pathlib import Path
 
 import requests
 
-from . import config
+from . import config, llm_guard
 
 API = "https://api.openai.com/v1"
 AI_CREDIT = "AI 생성 이미지 (OpenAI)"
@@ -115,7 +115,9 @@ def write_spec(section_text: str, title: str, category: str, planned_caption: st
         "text": {"format": {"type": "json_object"}},
     })
     if r.status_code != 200:
+        llm_guard.note_provider_error("openai", r.status_code, r.text)
         raise RuntimeError(f"{config.OPENAI_PROMPT_MODEL} HTTP {r.status_code}: {r.text[:150]}")
+    llm_guard.note_provider_ok("openai")
     d = r.json()
     text = next(c["text"] for o in d.get("output", []) if o.get("type") == "message"
                 for c in o.get("content", []) if c.get("type") == "output_text")
@@ -141,7 +143,9 @@ def draw(prompt: str, dest: Path) -> float:
             msg = r.json()["error"]["message"][:200]
         except Exception:
             pass
+        llm_guard.note_provider_error("openai", r.status_code, r.text)
         raise RuntimeError(f"{config.OPENAI_IMAGE_MODEL} HTTP {r.status_code}: {msg}")
+    llm_guard.note_provider_ok("openai")
     d = r.json()
     dest.write_bytes(base64.b64decode(d["data"][0]["b64_json"]))
     return _cost(config.OPENAI_IMAGE_MODEL, d.get("usage", {}))
@@ -165,7 +169,9 @@ def draw_cloudflare(prompt: str, dest: Path) -> float:
             msg = "; ".join(e.get("message", "") for e in r.json().get("errors", []))[:200] or msg
         except Exception:
             pass
+        llm_guard.note_provider_error("cloudflare", r.status_code, r.text)
         raise RuntimeError(f"Cloudflare HTTP {r.status_code}: {msg}")
+    llm_guard.note_provider_ok("cloudflare")
     img = (r.json().get("result") or {}).get("image")
     if not img:
         raise RuntimeError("Cloudflare 응답에 이미지가 없음")

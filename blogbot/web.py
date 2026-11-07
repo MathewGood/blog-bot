@@ -1540,6 +1540,17 @@ def _kimi_balance():
     return val
 
 
+@app.post("/api/provider-reset")
+def api_provider_reset():
+    """OpenAI·Cloudflare 오류 표시를 지운다 (충전 후 다음 호출에서 다시 판정)."""
+    from . import llm_guard
+    name = (request.get_json(silent=True) or {}).get("name", "")
+    if name not in ("openai", "cloudflare"):
+        return jsonify({"error": "bad name"}), 400
+    llm_guard.note_provider_ok(name)
+    return jsonify({"ok": True})
+
+
 @app.post("/api/anthropic-recheck")
 def api_anthropic_recheck():
     """충전 후 즉시 재확인: 초소형 호출로 크레딧 상태를 검사하고 차단기를 갱신."""
@@ -1586,6 +1597,9 @@ def api_config():
             "kimi_key": bool(config.KIMI_API_KEY),
             "kimi_balance": _kimi_balance(),
             "anthropic": __import__("blogbot.llm_guard", fromlist=["status"]).status(),
+            "provider_status": {
+                n: __import__("blogbot.llm_guard", fromlist=["x"]).provider_status(n)
+                for n in ("openai", "cloudflare")},
             "fallback_model": config.FALLBACK_MODEL,
             "image_provider": config.IMAGE_PROVIDER,
             "image_providers": [{"id": k, "label": v} for k, v in config.IMAGE_PROVIDERS],
