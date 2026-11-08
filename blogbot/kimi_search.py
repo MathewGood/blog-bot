@@ -101,14 +101,19 @@ def search_pro(query: str, timeout: int = 60, days=None, sites=None, limit=None)
 
     days: 최근 N일 안에 게시된 글만 / sites: 이 도메인(최대 5개)에서만 / limit: 1~20건.
     """
+    from . import usage_log
     try:
         r = requests.post(SEARCH_PRO_URL, headers=_headers(),
                           json=_body(query, days, sites, limit), timeout=timeout)
         if r.status_code != 200:
+            usage_log.record("kimi_search", "search", "search_pro", ok=False, note=f"HTTP {r.status_code}")
             return []
         r.encoding = "utf-8"
-        return r.json().get("search_results", []) or []
-    except Exception:
+        res = r.json().get("search_results", []) or []
+        usage_log.record("kimi_search", "search", "search_pro", ok=True, note=f"{len(res)}건")
+        return res
+    except Exception as e:
+        usage_log.record("kimi_search", "search", "search_pro", ok=False, note=str(e)[:80])
         return []
 
 
@@ -126,14 +131,18 @@ def search_basic(query: str, timeout: int = 30) -> list:
 
 def fetch_page(url: str, timeout: int = 45) -> str:
     """URL 본문을 마크다운으로 가져온다 (검색 대목이 너무 짧을 때 보강용)."""
+    from . import usage_log
     try:
         r = requests.post(FETCH_URL, headers=_headers(),
                           json={"url": url}, timeout=timeout)
         if r.status_code != 200:
+            usage_log.record("kimi_search", "fetch", "fetch", ok=False, note=f"HTTP {r.status_code}")
             return ""
         r.encoding = "utf-8"
+        usage_log.record("kimi_search", "fetch", "fetch", ok=True)
         return (r.json().get("markdown") or "").strip()
-    except Exception:
+    except Exception as e:
+        usage_log.record("kimi_search", "fetch", "fetch", ok=False, note=str(e)[:80])
         return ""
 
 
@@ -160,8 +169,10 @@ def gather(queries: list, min_rank: int = 2, per_query: int = 5,
     if not jobs:
         return []
 
+    from . import usage_log
+    sid = usage_log.current()
     with cf.ThreadPoolExecutor(max_workers=min(len(jobs), 6)) as pool:
-        fetched = pool.map(lambda j: search_pro(j[0], days=days, sites=j[1]), jobs)
+        fetched = pool.map(lambda j: usage_log.run_with(sid, search_pro, j[0], days=days, sites=j[1]), jobs)
         for (query, only_sites), items in zip(jobs, fetched):
             kept = 0
             for it in items[:per_query]:

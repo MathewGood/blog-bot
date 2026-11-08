@@ -232,6 +232,8 @@
   <h1>🌿 blogbot</h1>
   <span class="muted" id="modelName"></span>
   <div class="status" id="statusBar"></div>
+  <a href="#" id="usageBar" class="muted" style="font-size:12px;text-decoration:none"
+     onclick="toggleUsage();return false" title="조사(검색) 단계에서 쓴 API 집계 — 눌러서 자세히"></a>
   <span id="liveIndicator" title="실시간 진행 중인 작업">● 진행 중 <span id="liveCount">0</span></span>
   <span class="ext-badge off" id="extBadge" title="Chrome 확장 상태">확장 없음</span>
 </header>
@@ -721,6 +723,40 @@ async function loadStatus() {
 }
 
 // Anthropic 충전 후 즉시 재확인 (차단기 해제)
+// 조사(검색) 단계 API 사용 집계
+async function loadUsage() {
+  const el = $("#usageBar");
+  if (!el) return;
+  let u;
+  try { u = await (await fetch("/api/usage-stats?days=7")).json(); } catch (e) { return; }
+  window._usage = u;
+  if (!u.sessions && !Object.keys(u.by_provider || {}).length) {
+    el.textContent = "🔎 조사 기록 수집 중 (다음 글부터 집계)";
+    return;
+  }
+  const bp = u.by_provider || {};
+  const cl = (bp.claude || {}).calls || 0, km = (bp.kimi || {}).calls || 0, ks = (bp.kimi_search || {}).calls || 0;
+  el.textContent = `🔎 조사 7일: ${u.sessions}회 · Claude ${cl}회` +
+    (u.claude_llm_share_pct != null ? `(LLM 호출의 ${u.claude_llm_share_pct}%)` : "") +
+    ` · Kimi ${km}회 · 검색 ${ks}회 · Claude 약 $${(u.claude_cost_usd || 0).toFixed(3)}`;
+}
+function toggleUsage() {
+  const u = window._usage;
+  if (!u) return;
+  const pct = (n) => u.sessions ? ` (${Math.round(n * 100 / u.sessions)}%)` : "";
+  const lines = [
+    `최근 ${u.days}일 조사 ${u.sessions}회 (기사 ${(u.session_kinds || {}).article || 0} · 키워드/트렌드 ${(u.session_kinds || {}).topic || 0})`,
+    `· Claude가 쓰인 조사: ${u.sessions_with_claude}회${pct(u.sessions_with_claude)}`,
+    `· 자료집 보강(Haiku 웹 검색): ${u.sessions_boosted}회${pct(u.sessions_boosted)}`,
+    `· 대체 조사(Haiku 웹 검색): ${u.sessions_fallback}회${pct(u.sessions_fallback)}`,
+    `· Claude 추정 비용: $${(u.claude_cost_usd || 0).toFixed(3)}` +
+      (u.claude_cost_per_session != null ? ` (조사 1회당 $${u.claude_cost_per_session.toFixed(4)})` : ""),
+    "", "단계별 호출 수:",
+    ...(u.by_purpose || []).map(p => `· [${p.provider}] ${p.label}: ${p.calls}회` + (p.fail ? ` (실패 ${p.fail})` : "")),
+  ];
+  alert(lines.join("\n"));
+}
+
 async function resetProvider(name) {
   await fetch("/api/provider-reset", { method: "POST", headers: {"Content-Type": "application/json"},
                                        body: JSON.stringify({ name }) });
@@ -1249,6 +1285,7 @@ $("#liveIndicator").addEventListener("click", () => {
 });
 
 loadStatus();
+loadUsage();
 loadTopics();
 refreshConsole();
 </script>

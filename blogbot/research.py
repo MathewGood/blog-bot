@@ -14,7 +14,7 @@ import time
 import anthropic
 import requests
 
-from . import config, kimi_search
+from . import config, kimi_search, usage_log
 
 DEADLINE_SEC = 240  # 조사 1회 시도 상한 (브리프 3,000~4,000자 작성에 90~150초 소요)
 
@@ -87,7 +87,7 @@ _COMPOSE_SYSTEM = _SYSTEM + """
 
 
 def _kimi_chat(messages: list, model: str, max_tokens: int = 16000,
-               json_mode: bool = False, timeout: int = 180) -> str:
+               json_mode: bool = False, timeout: int = 180, purpose: str = None) -> str:
     """도구 없이 Kimi에 한 번 물어본다 (검색은 별도 REST API가 이미 수행)."""
     body = {
         "model": model,
@@ -98,16 +98,26 @@ def _kimi_chat(messages: list, model: str, max_tokens: int = 16000,
     }
     if json_mode:
         body["response_format"] = {"type": "json_object"}
-    r = requests.post(f"{config.KIMI_BASE_URL}/chat/completions",
-                      headers={"Authorization": f"Bearer {config.KIMI_API_KEY}",
-                               "Content-Type": "application/json"},
-                      json=body, timeout=(30, timeout))
+    try:
+        r = requests.post(f"{config.KIMI_BASE_URL}/chat/completions",
+                          headers={"Authorization": f"Bearer {config.KIMI_API_KEY}",
+                                   "Content-Type": "application/json"},
+                          json=body, timeout=(30, timeout))
+    except Exception as e:
+        if purpose:
+            usage_log.record("kimi", purpose, model, ok=False, note=str(e)[:80])
+        raise
     r.encoding = "utf-8"
+    if r.status_code != 200 and purpose:
+        usage_log.record("kimi", purpose, model, ok=False, note=f"HTTP {r.status_code}")
     if r.status_code == 400 and "content_filter" in r.text:
         raise ContentRejected("Kimi가 민감 주제로 판단해 거부")
     if r.status_code != 200:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text[:150]}")
-    return (r.json()["choices"][0]["message"].get("content") or "").strip()
+    data = r.json()
+    if purpose:
+        usage_log.record("kimi", purpose, model, True, *usage_log.kimi_usage(data))
+    return (data["choices"][0]["message"].get("content") or "").strip()
 
 
 def _make_queries(article_text: str, category_ko: str,
@@ -123,13 +133,19 @@ def _make_queries(article_text: str, category_ko: str,
                 text = _kimi_chat(
                     [{"role": "system", "content": (system or _QUERY_SYSTEM) + config.time_note(queries=True)},
                      {"role": "user", "content": user}],
-                    KIMI_RESEARCH_MODELS[-1], max_tokens=1000, json_mode=True, timeout=90)
+                    KIMI_RESEARCH_MODELS[-1], max_tokens=1000, json_mode=True, timeout=90,
+                    purpose="queries")
             else:
                 client = anthropic.Anthropic(timeout=60.0, max_retries=1)
-                resp = client.messages.create(
-                    model=config.CLAUDE_MODEL, max_tokens=1000,
-                    system=(system or _QUERY_SYSTEM) + config.time_note(queries=True),
-                    messages=[{"role": "user", "content": user}])
+                try:
+                    resp = client.messages.create(
+                        model=config.CLAUDE_MODEL, max_tokens=1000,
+                        system=(system or _QUERY_SYSTEM) + config.time_note(queries=True),
+                        messages=[{"role": "user", "content": user}])
+                except Exception as e:
+                    usage_log.record("claude", "queries", config.CLAUDE_MODEL, ok=False, note=str(e)[:80])
+                    raise
+                usage_log.record("claude", "queries", config.CLAUDE_MODEL, True, *usage_log.claude_usage(resp))
                 text = "".join(b.text for b in resp.content if b.type == "text")
             m = re.search(r"\{.*\}", text, re.S)
             queries = json.loads(m.group(0))["queries"]
@@ -178,12 +194,17 @@ def _research_with_search_api(article_text: str, category_ko: str, log=None) -> 
                     continue
                 brief = _kimi_chat(
                     [{"role": "system", "content": _COMPOSE_SYSTEM + config.time_note()},
-                     {"role": "user", "content": user}], model, timeout=240)
+                     {"role": "user", "content": user}], model, timeout=240, purpose="brief")
             else:
                 client = anthropic.Anthropic(timeout=180.0, max_retries=1)
-                resp = client.messages.create(
-                    model=model, max_tokens=8000, system=_COMPOSE_SYSTEM + config.time_note(),
-                    messages=[{"role": "user", "content": user}])
+                try:
+                    resp = client.messages.create(
+                        model=model, max_tokens=8000, system=_COMPOSE_SYSTEM + config.time_note(),
+                        messages=[{"role": "user", "content": user}])
+                except Exception as e:
+                    usage_log.record("claude", "brief", model, ok=False, note=str(e)[:80])
+                    raise
+                usage_log.record("claude", "brief", model, True, *usage_log.claude_usage(resp))
                 brief = "".join(b.text for b in resp.content if b.type == "text").strip()
             brief = _strip_meta(brief)
             ok, why = _brief_ok(brief)
@@ -223,6 +244,11 @@ TOPIC_MIN_DOSSIER = 5000  # 이보다 얇은 자료집은 웹 검색으로 보�
 
 
 def topic_dossier(query: str, category_ko: str, log=None) -> tuple:
+    with usage_log.session("topic", query):
+        return _topic_dossier(query, category_ko, log)
+
+
+def _topic_dossier(query: str, category_ko: str, log=None) -> tuple:
     """검색어 → (글쓰기 재료가 될 자료집 텍스트, 출처 목록, 조사 방식).
 
     1순위 Kimi Search Pro로 공신력 자료를 모으고, 부족하면 Haiku 웹 검색 브리프로 대신한다.
@@ -250,8 +276,9 @@ def topic_dossier(query: str, category_ko: str, log=None) -> tuple:
                 _note(f"  · 자료집 {len(dossier):,}자로 얇음 — Haiku 웹 검색으로 보강 중...")
                 try:
                     extra = _research_with_claude(
+                        purpose="boost", article_text=
                         f"다음 주제를 돈과 자본의 흐름 관점(원인·누가 얻고 지불하나·앞으로의 방향)으로 분석하는 장문 글을 쓸 수 있도록 "
-                        f"최신 자료를 폭넓게 조사하라. 금액·비중·증감률은 출처와 기준 시점과 함께 정확히.\n주제: {query}", category_ko)
+                        f"최신 자료를 폭넓게 조사하라. 금액·비중·증감률은 출처와 기준 시점과 함께 정확히.\n주제: {query}", category_ko=category_ko)
                     if extra and len(extra) >= 400:
                         dossier += "\n\n[보강 조사 — 웹 검색 브리프]\n" + extra
                         how += " + haiku web_search"
@@ -284,6 +311,11 @@ def topic_note(query: str, sources: list) -> str:
 
 
 def research(article_text: str, category_ko: str, log=None) -> tuple:
+    with usage_log.session("article", article_text[:60]):
+        return _research(article_text, category_ko, log)
+
+
+def _research(article_text: str, category_ko: str, log=None) -> tuple:
     """기사 → (리서치 브리프 또는 None, 사용한 모델명).
 
     Kimi 최신 모델부터 시도하고, 모두 실패하면 Haiku로 조사한다.
@@ -392,6 +424,8 @@ def _kimi_search_once(article_text: str, category_ko: str, model: str) -> str:
             timeout=(30, 240),
         )
         r.encoding = "utf-8"
+        if r.status_code != 200:
+            usage_log.record("kimi", "kimi_websearch", model, ok=False, note=f"HTTP {r.status_code}")
         if r.status_code == 400 and "tokenization failed" in r.text:
             raise _KimiSearchUnsupported("웹 검색 결과 처리 불가(서버 측 오류)")
         if r.status_code == 400 and "content_filter" in r.text:
@@ -399,8 +433,11 @@ def _kimi_search_once(article_text: str, category_ko: str, model: str) -> str:
             raise ContentRejected("Kimi가 민감 주제로 판단해 거부")
         if r.status_code != 200:
             raise RuntimeError(f"HTTP {r.status_code}: {r.text[:120]}")
-        choice = r.json()["choices"][0]
+        data = r.json()
+        choice = data["choices"][0]
         msg = choice["message"]
+        usage_log.record("kimi", "kimi_websearch", model, True, *usage_log.kimi_usage(data),
+                         searches=len(msg.get("tool_calls") or []))
         if choice.get("finish_reason") == "tool_calls" and msg.get("tool_calls"):
             messages.append(msg)
             for tc in msg["tool_calls"]:
@@ -450,7 +487,8 @@ def _brief_ok(brief: str) -> tuple:
     return True, ""
 
 
-def _research_with_claude(article_text: str, category_ko: str, model: str = None) -> str:
+def _research_with_claude(article_text: str, category_ko: str, model: str = None,
+                          purpose: str = "fallback") -> str:
     """(2순위) Haiku + Anthropic 웹 검색. Anthropic 크레딧이 부족하면 CreditExhausted."""
     from . import llm_guard
 
@@ -472,6 +510,22 @@ def _research_with_claude(article_text: str, category_ko: str, model: str = None
     messages = [{"role": "user", "content": user_msg}]
     response = None
     deadline = time.time() + DEADLINE_SEC
+    tot = [0, 0, 0]   # 입력·출력 토큰, 웹 검색 횟수 (pause_turn 재개 포함 합계)
+    try:
+        return _claude_search_loop(client, used_model, user_msg, messages, deadline, tot)
+    except Exception as e:
+        usage_log.record("claude", purpose, used_model, False, *tot, note=str(e)[:80])
+        tot = None
+        raise
+    finally:
+        if tot is not None:
+            usage_log.record("claude", purpose, used_model, True, *tot)
+
+
+def _claude_search_loop(client, used_model, user_msg, messages, deadline, tot):
+    from . import llm_guard
+
+    response = None
     # 서버 도구는 pause_turn으로 중단될 수 있으므로 재개 루프
     for _ in range(4):
         if time.time() > deadline:
@@ -495,6 +549,8 @@ def _research_with_claude(article_text: str, category_ko: str, model: str = None
                     if time.time() > deadline:
                         raise TimeoutError(f"조사 시간 상한 {DEADLINE_SEC}초 초과")
                 response = stream.get_final_message()
+            for i, v in enumerate(usage_log.claude_usage(response)):
+                tot[i] += v
         except anthropic.BadRequestError as e:
             llm_guard.check_and_raise(e)
         if response.stop_reason == "pause_turn":

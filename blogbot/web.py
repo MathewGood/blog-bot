@@ -1540,6 +1540,17 @@ def _kimi_balance():
     return val
 
 
+@app.get("/api/usage-stats")
+def api_usage_stats():
+    """조사(검색) 단계 API 사용 집계 — Claude·Kimi 호출 수, 보강 발생률, Claude 추정 비용."""
+    from . import usage_log
+    try:
+        days = max(1, min(int(request.args.get("days", 7)), 60))
+    except ValueError:
+        days = 7
+    return jsonify(usage_log.stats(days))
+
+
 @app.post("/api/provider-reset")
 def api_provider_reset():
     """OpenAI·Cloudflare 오류 표시를 지운다 (충전 후 다음 호출에서 다시 판정)."""
