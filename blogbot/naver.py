@@ -194,6 +194,25 @@ _HIGHLIGHT_STYLE = "font-size:24px;color:#1b7a3d;text-align:center;line-height:1
 _EMPTY_P = "<p><br></p>"
 
 
+def _normal(inner: str) -> str:
+    """글자 굵기를 '보통'으로 명시한다. 같은 붙여넣기 조각 안에서 앞의 소제목·강조 문구(<b>)의
+    굵게가 다음 문단으로 번지는 것을 막는다 (2026-11-08 실측: 긴 한 문단짜리 본문이 굵게 올라가
+    Cmd+B로도 풀리지 않아 발행이 중단됨 → 처음부터 보통 굵기로 붙여 넣으면 번지지 않음)."""
+    return f'<span style="font-weight:normal">{inner}</span>'
+
+
+def _normalize_paras(html: str) -> str:
+    """<p ...>내용</p>, <li ...>내용</li>의 내용을 보통 굵기 span으로 감싼다 (빈 문단 제외)."""
+    import re
+
+    def rep(m):
+        body = m.group(2)
+        if not body.strip() or body.strip() == "<br>":
+            return m.group(0)
+        return m.group(1) + _normal(body) + m.group(3)
+    return re.sub(r"(<(?:p|li)\b[^>]*>)(.*?)(</(?:p|li)>)", rep, html, flags=re.S)
+
+
 def hashtag(t: str) -> str:
     """네이버는 공백에서 해시태그를 끊으므로 태그 안 공백을 없앤다 ('에너지 위기' → #에너지위기)."""
     return "#" + "".join(str(t).split())
@@ -206,8 +225,8 @@ def _md_to_html(text: str) -> str:
     html = md.markdown(text)
     html = (html.replace("<strong>", "<b>").replace("</strong>", "</b>")
                 .replace("<em>", "<i>").replace("</em>", "</i>"))
-    return (html.replace("<p>", f'<p style="{_BODY_STYLE}">')
-                .replace("<li>", f'<li style="{_BODY_STYLE}">'))
+    return _normalize_paras(html.replace("<p>", f'<p style="{_BODY_STYLE}">')
+                                .replace("<li>", f'<li style="{_BODY_STYLE}">'))
 
 
 def section_html(sec: dict, first: bool = False) -> str:
@@ -252,7 +271,8 @@ def summary_html(post: dict) -> str:
     if not items:
         return ""
     marks = "①②③④⑤"
-    lines = "".join(f'<p style="{_BODY_STYLE}">{marks[i]} {escape(t)}</p>' for i, t in enumerate(items[:5]))
+    lines = "".join(f'<p style="{_BODY_STYLE}">{_normal(marks[i] + " " + escape(t))}</p>'
+                    for i, t in enumerate(items[:5]))
     head = f'<p style="font-size:16px;color:#1b7a3d"><b>30초 요약</b></p>'
     return _box(head + lines)
 
@@ -277,7 +297,7 @@ def table_html(table: dict) -> str:
     cap = (table.get("title") or "").strip()
     out = _EMPTY_P
     if cap:
-        out += f'<p style="{_BODY_STYLE}">\u25bc {escape(cap)}</p>'
+        out += f'<p style="{_BODY_STYLE}">' + _normal("\u25bc " + escape(cap)) + "</p>"
     return out + (f'<table style="border-collapse:collapse;width:100%"><thead><tr>{th}</tr></thead>'
                   f'<tbody>{body}</tbody></table>')
 
@@ -289,8 +309,8 @@ def closing_html(post: dict) -> str:
     q = ((post.get("closing") or {}).get("question") or "").strip()
     if not q:
         return ""
-    inner = (f'<p style="{_BODY_STYLE}">{escape(q)}</p>'
-             f'<p style="{_BODY_STYLE}">생각이나 경험을 댓글로 남겨 주세요.</p>')
+    inner = (f'<p style="{_BODY_STYLE}">{_normal(escape(q))}</p>'
+             f'<p style="{_BODY_STYLE}">{_normal("생각이나 경험을 댓글로 남겨 주세요.")}</p>')
     return _EMPTY_P + _box(inner, _BOX2_STYLE)
 
 
@@ -300,13 +320,13 @@ def footer_html(post: dict) -> str:
     parts = []
     source_line = (post.get("source_line") or "").strip()
     if source_line:
-        parts.append(f'<hr><p style="{_SOURCE_STYLE}">{escape(source_line)}</p>')
+        parts.append(f'<hr><p style="{_SOURCE_STYLE}">{_normal(escape(source_line))}</p>')
     if config.AI_IMAGE_NOTICE and any(m.get("ai_generated") for m in post.get("image_files", [])):
-        parts.append(f'<p style="{_SOURCE_STYLE}">{escape(config.AI_NOTICE_TEXT)}</p>')
+        parts.append(f'<p style="{_SOURCE_STYLE}">{_normal(escape(config.AI_NOTICE_TEXT))}</p>')
     tags = " ".join(hashtag(t) for t in post.get("tags", []))
     if tags:
         # 색은 지정하지 않는다 — 네이버가 해시태그 링크 색으로 통일해 표시
-        parts.append(f'{_EMPTY_P}<p style="font-size:16px">{escape(tags)}</p>')
+        parts.append(f'{_EMPTY_P}<p style="font-size:16px">{_normal(escape(tags))}</p>')
     return "".join(parts)
 
 
