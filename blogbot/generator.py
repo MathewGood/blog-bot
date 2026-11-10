@@ -363,6 +363,12 @@ def _generate_post(
     category_ko = config.CATEGORIES.get(category, category)
     selected_model = config.enforce_model(model or config.MODEL)
 
+    # EXAONE 분기 (LG AI연구원, OpenAI 호환) — Anthropic 클라이언트 초기화조차 하지 않음
+    if config.is_exaone_model(selected_model):
+        return _generate_with_exaone(
+            article_text, category_ko, extra_note, selected_model, research_brief
+        )
+
     # Kimi/Moonshot 분기 — Anthropic 클라이언트 초기화조차 하지 않음
     if config.is_kimi_model(selected_model):
         return _generate_with_kimi(
@@ -537,8 +543,52 @@ def _generate_with_kimi(
             "  KIMI_API_KEY=sk-...\n"
             "(Moonshot Platform에서 발급: https://platform.moonshot.ai/console/api-keys)"
         )
+    return _generate_openai_compat(
+        article_text, category_ko, extra_note, model, research_brief,
+        label="Kimi", base_url=config.KIMI_BASE_URL, api_key=config.KIMI_API_KEY,
+        key_name="KIMI_API_KEY",
+        extra_payload={"response_format": {"type": "json_object"},
+                       # kimi-k2.6/k2.7 계열은 temperature=1만 허용. 예전 moonshot-v1 계열은 0~1 자유.
+                       "temperature": 1 if model.startswith("kimi") else 0.6})
 
-    # Kimi는 json_object 모드만 안정적으로 지원 — 스키마는 시스템 프롬프트로 지시
+
+def _generate_with_exaone(
+    article_text: str,
+    category_ko: str,
+    extra_note: str,
+    model: str,
+    research_brief: str | None = None,
+) -> dict:
+    if not config.EXAONE_API_KEY:
+        raise RuntimeError(
+            "EXAONE_API_KEY가 설정돼 있지 않습니다. .env 파일에 다음 줄을 추가하세요:\n"
+            "  EXAONE_API_KEY=...\n(EXAONE API Platform에서 발급: https://docs.exaone.ai)"
+        )
+    # EXAONE 문서에는 response_format(json 모드)이 없다 — 스키마는 시스템 프롬프트로만 지시한다.
+    # 항상 추론을 거치므로 reasoning_effort로 속도를 조절한다(글쓰기는 low 기본).
+    return _generate_openai_compat(
+        article_text, category_ko, extra_note, model, research_brief,
+        label="EXAONE", base_url=config.EXAONE_BASE_URL, api_key=config.EXAONE_API_KEY,
+        key_name="EXAONE_API_KEY",
+        extra_payload={"temperature": 1.0, "top_p": 0.95,
+                       "reasoning_effort": config.EXAONE_REASONING_EFFORT})
+
+
+def _generate_openai_compat(
+    article_text: str,
+    category_ko: str,
+    extra_note: str,
+    model: str,
+    research_brief: str | None,
+    *,
+    label: str,
+    base_url: str,
+    api_key: str,
+    key_name: str,
+    extra_payload: dict,
+) -> dict:
+    """OpenAI 호환 chat/completions(스트리밍)로 글을 생성한다 — Kimi·EXAONE 공용."""
+    # json_object 모드(또는 프롬프트)만으로 JSON을 받는다 — 스키마는 시스템 프롬프트로 지시
     style = _style_text()
     schema_text = json.dumps(POST_SCHEMA, ensure_ascii=False, indent=2)
     intro = ("당신은 한국의 개인 블로거를 대신해 글을 쓰는 대필 작가입니다.\n"
@@ -572,25 +622,23 @@ def _generate_with_kimi(
 {article_text}
 </article>{_research_block(research_brief)}"""
 
-    url = f"{config.KIMI_BASE_URL.rstrip('/')}/chat/completions"
+    url = f"{base_url.rstrip('/')}/chat/completions"
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_msg},
         ],
-        "response_format": {"type": "json_object"},
-        # kimi-k2.6/k2.7 계열은 temperature=1만 허용. 예전 moonshot-v1 계열은 0~1 자유.
-        "temperature": 1 if model.startswith("kimi") else 0.6,
         # 조사 브리프가 붙으면 출력이 길어져 8192로는 JSON이 중간에 잘린다.
         "max_tokens": 32000,
         # 긴 출력은 비스트리밍 시 읽기 타임아웃이 난다 — 스트리밍으로 받는다.
         "stream": True,
+        **extra_payload,
     }
     r = requests.post(
         url,
         headers={
-            "Authorization": f"Bearer {config.KIMI_API_KEY}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
         json=payload,
@@ -598,9 +646,9 @@ def _generate_with_kimi(
         stream=True,
     )
     if r.status_code == 401:
-        raise RuntimeError("Kimi 인증 실패 (401). KIMI_API_KEY가 유효한지 확인하세요.")
+        raise RuntimeError(f"{label} 인증 실패 (401). {key_name}가 유효한지 확인하세요.")
     if not r.ok:
-        raise RuntimeError(f"Kimi API 오류 {r.status_code}: {r.text[:400]}")
+        raise RuntimeError(f"{label} API 오류 {r.status_code}: {r.text[:400]}")
 
     # SSE 스트림 누적
     # Moonshot 응답에 charset이 없으면 requests가 ISO-8859-1로 디코딩해 한글이 깨진다.
@@ -626,23 +674,23 @@ def _generate_with_kimi(
             finish = ch["finish_reason"]
     text = "".join(chunks)
     if not text.strip():
-        raise RuntimeError("Kimi 스트림에서 본문을 받지 못했습니다.")
+        raise RuntimeError(f"{label} 스트림에서 본문을 받지 못했습니다.")
     text = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text)   # 모델이 코드펜스로 감싸 보낸 경우
     try:
         post = json.loads(text)
     except json.JSONDecodeError as e:
         if finish == "length":
             raise RuntimeError(
-                "Kimi 응답이 출력 한도에 걸려 잘렸습니다 (finish_reason=length). "
+                f"{label} 응답이 출력 한도에 걸려 잘렸습니다 (finish_reason=length). "
                 "기사가 너무 길거나 조사 브리프가 큰 경우입니다. "
                 "기사를 줄이거나 조사를 끄고 다시 시도하세요."
             )
-        raise RuntimeError(f"Kimi 응답을 JSON으로 해석 실패: {e}\n원문 앞부분: {text[:400]}")
+        raise RuntimeError(f"{label} 응답을 JSON으로 해석 실패: {e}\n원문 앞부분: {text[:400]}")
 
-    # 필수 필드 방어적 검증 (Kimi는 스키마 강제가 안 되므로)
+    # 필수 필드 방어적 검증 (스키마 강제가 안 되므로)
     for k in ("title", "slug", "tags", "sections", "images"):
         if k not in post:
-            raise RuntimeError(f"Kimi 응답에 필수 필드 '{k}'가 없습니다.")
+            raise RuntimeError(f"{label} 응답에 필수 필드 '{k}'가 없습니다.")
     post.setdefault("source_line", "")
     post["category"] = category_ko
     post["model"] = model

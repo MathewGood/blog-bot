@@ -693,9 +693,11 @@ async function loadStatus() {
   // 모델 드롭다운 채우기 (기본값 선택). Kimi 키가 없으면 Kimi 모델은 비활성.
   const sel = $("#genModel");
   const isKimi = (id) => id.startsWith("kimi") || id.startsWith("moonshot");
+  const isExaone = (id) => id.toLowerCase().startsWith("k-exaone") || id.toLowerCase().startsWith("exaone");
   sel.innerHTML = (c.models || []).map(m => {
-    const disabled = isKimi(m.id) && !c.kimi_key;
-    const suffix = disabled ? " · KIMI_API_KEY 없음" : "";
+    const noKimi = isKimi(m.id) && !c.kimi_key, noExa = isExaone(m.id) && !c.exaone_key;
+    const disabled = noKimi || noExa;
+    const suffix = noKimi ? " · KIMI_API_KEY 없음" : (noExa ? " · EXAONE_API_KEY 없음" : "");
     return `<option value="${m.id}" ${m.id === c.model ? "selected" : ""}${disabled ? " disabled" : ""}>${m.label}${suffix}</option>`;
   }).join("");
   // 사진 공급원 드롭다운 (OpenAI 키가 없으면 AI 생성은 비활성)

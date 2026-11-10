@@ -42,6 +42,13 @@ KIMI_API_KEY = (
 )
 KIMI_BASE_URL = os.getenv("KIMI_BASE_URL", "https://api.moonshot.ai/v1")
 
+# EXAONE (LG AI연구원) — OpenAI 호환 API (https://docs.exaone.ai/ko/docs/quick-start)
+# 한국어 모델. 항상 추론을 거치므로 글쓰기에는 reasoning_effort=low(빠름)를 기본으로 쓴다.
+EXAONE_API_KEY = os.getenv("EXAONE_API_KEY", "")
+EXAONE_BASE_URL = os.getenv("EXAONE_BASE_URL", "https://api.exaone.ai/v1")
+EXAONE_MODEL = os.getenv("EXAONE_MODEL", "k-exaone_v2.5")
+EXAONE_REASONING_EFFORT = os.getenv("EXAONE_REASONING_EFFORT", "low")   # low | high | max
+
 # 사용자가 프로젝트 밖에 통합 .env 파일을 두는 경우에도 인식하도록 보조 경로도 로드.
 # (이미 처음에 프로젝트 .env를 load_dotenv로 로드했음 — 여기선 override=False로 보완만)
 def _drive_root() -> Path:
@@ -73,6 +80,8 @@ for _p in _EXTRA_ENV_PATHS:
         pass
 
 # 보조 로드 후 재조회 (첫 번째 조회 때 없었을 수 있음)
+if not EXAONE_API_KEY:
+    EXAONE_API_KEY = os.getenv("EXAONE_API_KEY", "")
 if not KIMI_API_KEY:
     KIMI_API_KEY = (
         os.getenv("KIMI_API_KEY", "")
@@ -139,11 +148,17 @@ AVAILABLE_MODELS = [
     ("kimi-k2.6", "Kimi K2.6 · Moonshot 주력"),
     ("kimi-k2.7-code", "Kimi K2.7 Code · 구조화 출력 특화"),
     ("kimi-k2.7-code-highspeed", "Kimi K2.7 Code 고속"),
+    # EXAONE (LG AI연구원) — EXAONE_API_KEY 미설정 시 GUI가 자동 비활성.
+    ("k-exaone_v2.5", "K-EXAONE 2.5 · LG AI연구원 한국어 모델"),
 ]
 
 
 def is_kimi_model(model_id: str) -> bool:
     return model_id.startswith("kimi") or model_id.startswith("moonshot")
+
+
+def is_exaone_model(model_id: str) -> bool:
+    return (model_id or "").lower().startswith(("k-exaone", "exaone"))
 
 # 독자 설정 (2026-10-28 사용자 결정): 출퇴근 시간대(06~09시, 18~22시)에 자동 예약을 시작하면 직장인,
 # 그 외에는 여성 독자. 문체는 prompts/style_guide.md(여성) / prompts/audience_worker.md(직장인 페르소나 대체).

@@ -1606,6 +1606,7 @@ def api_config():
             "anthropic_key": bool(config.ANTHROPIC_API_KEY and len(config.ANTHROPIC_API_KEY) > 20),
             "pexels_key": bool(config.PEXELS_API_KEY),
             "kimi_key": bool(config.KIMI_API_KEY),
+            "exaone_key": bool(config.EXAONE_API_KEY),
             "kimi_balance": _kimi_balance(),
             "anthropic": __import__("blogbot.llm_guard", fromlist=["status"]).status(),
             "provider_status": {
