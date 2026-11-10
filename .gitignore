@@ -19,3 +19,5 @@ pann_auto.json
 *.log
 inbox/
 usage_log.jsonl
+.auth.json
+.auth.tmp

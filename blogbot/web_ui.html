@@ -476,6 +476,16 @@
 <script>
 const $ = (s) => document.querySelector(s);
 
+// 공개 주소에서 로그인이 풀리면(401) 로그인 화면으로 보낸다
+(() => {
+  const _fetch = window.fetch.bind(window);
+  window.fetch = async (...a) => {
+    const r = await _fetch(...a);
+    if (r.status === 401 && r.headers.get("X-Blogbot-Auth") === "required") location.href = "/login";
+    return r;
+  };
+})();
+
 // ─── 창/탭 관리: 새 탭이 쌓이지 않게 이름 있는 창 하나만 재사용 ─────────
 // (window.open(url, "blogbotArticle")는 호출할 때마다 새 탭 → 모바일에서 탭이 수십 개 쌓임)
 const _openedPreviews = new Set();
@@ -688,11 +698,15 @@ async function loadStatus() {
     return `<span title="${st.reason || ""}"><span class="dot bad"></span>${msg} ` +
       `<a href="#" onclick="resetProvider('${key}');return false" style="font-size:11px">충전함</a></span>`;
   };
+  const au = c.auth || {};
+  const authLabel = au.public
+    ? `<span><span class="dot ok"></span>공개 접속 <a href="/logout" style="font-size:11px">로그아웃</a></span>`
+    : `<span title="인터넷 공개 주소로 들어올 때 쓰는 비밀번호${au.public_url ? " · " + au.public_url : ""}"><span class="dot ${au.password_set ? "ok" : "bad"}"></span>공개 비밀번호${au.password_set ? "" : " 미설정"} <a href="/set-password" style="font-size:11px">${au.password_set ? "변경" : "설정"}</a></span>`;
   const naverOk = !!(c.naver_session && c.naver_session.ok);
   $("#statusBar").innerHTML =
     `<span title="${an.reason || ""}"><span class="dot ${claudeOk ? "ok" : "bad"}"></span>${claudeLabel}` +
       (an.ok === false ? ` <a href="#" onclick="recheckClaude();return false" style="font-size:11px">재확인</a>` : "") +
-    `</span>` + kimiLabel + provLabel("openai", "OpenAI") + provLabel("cloudflare", "Cloudflare") +
+    `</span>` + kimiLabel + provLabel("openai", "OpenAI") + provLabel("cloudflare", "Cloudflare") + authLabel +
     `<span><span class="dot ${c.pexels_key ? "ok" : "bad"}"></span>이미지</span>` +
     `<span><span class="dot ${c.news_login ? "ok" : "bad"}"></span>뉴스로그인</span>` +
     `<span><span class="dot ${c.naver_blog_id ? "ok" : "bad"}"></span>네이버(${c.naver_blog_id || "미설정"})</span>` +

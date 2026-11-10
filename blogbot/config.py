@@ -49,6 +49,9 @@ EXAONE_BASE_URL = os.getenv("EXAONE_BASE_URL", "https://api.exaone.ai/v1")
 EXAONE_MODEL = os.getenv("EXAONE_MODEL", "k-exaone_v2.5")
 EXAONE_REASONING_EFFORT = os.getenv("EXAONE_REASONING_EFFORT", "low")   # low | high | max
 
+# 인터넷 공개 주소(Tailscale Funnel 등). 화면 안내용 — 실제 보호는 auth.py의 공개 포트 로그인이 한다.
+PUBLIC_URL = os.getenv("BLOGBOT_PUBLIC_URL", "")
+
 # 사용자가 프로젝트 밖에 통합 .env 파일을 두는 경우에도 인식하도록 보조 경로도 로드.
 # (이미 처음에 프로젝트 .env를 load_dotenv로 로드했음 — 여기선 override=False로 보완만)
 def _drive_root() -> Path:

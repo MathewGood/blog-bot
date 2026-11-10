@@ -17,7 +17,7 @@ import socket
 from html.parser import HTMLParser
 
 import requests
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, redirect, request, send_from_directory
 
 from . import builder, config, generator, images
 
@@ -28,10 +28,164 @@ app = Flask(__name__)
 # 로컬 개발용이므로 모든 오리진 허용 — 서버가 127.0.0.1에만 바인딩되어 안전.
 @app.after_request
 def _cors(resp):
+    from . import auth
+
+    if auth.is_public(request):
+        # 공개 URL로 온 요청: 다른 사이트에서 읽지 못하게 CORS 허용을 붙이지 않고 보안 헤더를 단다
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Referrer-Policy"] = "same-origin"
+        return resp
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return resp
+
+
+# ─────────────────────────────────────────────────────────────
+# 공개 URL(터널) 접속용 비밀번호 로그인 — 자세한 설계는 auth.py
+# ─────────────────────────────────────────────────────────────
+_AUTH_EXEMPT = {"/login", "/logout", "/icon.svg", "/manifest.json"}
+
+_AUTH_PAGE = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>blogbot · __TITLE__</title>
+<style>
+ body{font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+      background:#f4f6f5;color:#222;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}
+ .box{background:#fff;border:1px solid #dfe5e1;border-radius:14px;padding:26px 22px;width:min(92vw,360px);
+      box-shadow:0 6px 24px rgba(0,0,0,.06)}
+ h1{font-size:19px;margin:0 0 6px} p{font-size:13px;color:#667;margin:0 0 14px;line-height:1.6}
+ label{display:block;font-size:13px;color:#445;margin:10px 0 4px}
+ input{width:100%;box-sizing:border-box;font-size:16px;padding:11px 12px;border:1px solid #cfd6d2;border-radius:9px}
+ button{width:100%;margin-top:16px;font-size:16px;padding:12px;border:0;border-radius:9px;background:#1b7a3d;color:#fff;font-weight:700}
+ .err{background:#fdecec;color:#b42318;border-radius:8px;padding:9px 11px;font-size:13px;margin-bottom:10px}
+ .ok{background:#e9f7ee;color:#1b7a3d;border-radius:8px;padding:9px 11px;font-size:13px;margin-bottom:10px}
+</style></head><body><div class="box">__BODY__</div></body></html>"""
+
+
+def _auth_page(title: str, body: str, status: int = 200) -> Response:
+    return Response(_AUTH_PAGE.replace("__TITLE__", title).replace("__BODY__", body),
+                    status=status, mimetype="text/html")
+
+
+@app.before_request
+def _auth_gate():
+    from . import auth
+
+    if not auth.is_public(request):
+        return None                      # 로컬·같은 Wi-Fi·Tailscale 사설 주소는 이전처럼 그대로
+    if request.path in _AUTH_EXEMPT:
+        return None
+    if not auth.has_password():
+        return _auth_page("접속 차단", "<h1>🔒 접속이 잠겨 있습니다</h1>"
+                          "<p>공개 접속용 비밀번호가 아직 설정되지 않았습니다. "
+                          "집(같은 Wi-Fi)이나 Tailscale 주소에서 비밀번호를 먼저 설정하세요.</p>", 503)
+    if request.method not in ("GET", "HEAD", "OPTIONS") and not auth.same_origin(request):
+        return jsonify({"error": "forbidden"}), 403
+    if auth.token_ok(request.cookies.get(auth.COOKIE, "")):
+        return None
+    if request.path.startswith("/api/") or request.method != "GET":
+        r = jsonify({"error": "로그인이 필요합니다.", "login": "/login"})
+        r.status_code = 401
+        r.headers["X-Blogbot-Auth"] = "required"
+        return r
+    return redirect("/login")
+
+
+def _login_form(msg: str = "", status: int = 200) -> Response:
+    err = f'<div class="err">{msg}</div>' if msg else ""
+    return _auth_page("로그인", f"""<h1>🌿 blogbot 로그인</h1>
+<p>공개 주소로 접속하셨습니다. 비밀번호를 입력하세요.</p>{err}
+<form method="post" action="/login" autocomplete="on">
+<label for="pw">비밀번호</label>
+<input id="pw" name="password" type="password" autocomplete="current-password" autofocus required>
+<button type="submit">로그인</button></form>""", status)
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    from . import auth
+
+    if not auth.is_public(request):
+        return redirect("/")             # 사설 주소에서는 로그인이 필요 없다
+    if not auth.has_password():
+        return _auth_page("접속 차단", "<h1>🔒 접속이 잠겨 있습니다</h1>"
+                          "<p>공개 접속용 비밀번호가 아직 설정되지 않았습니다.</p>", 503)
+    if request.method == "GET":
+        if auth.token_ok(request.cookies.get(auth.COOKIE, "")):
+            return redirect("/")
+        return _login_form()
+    ip = auth.client_ip(request)
+    if not auth.same_origin(request):
+        return _login_form("요청을 처리할 수 없습니다.", 403)
+    wait = auth.locked_for(ip)
+    if wait:
+        return _login_form(f"로그인 시도가 너무 많습니다. {wait // 60 + 1}분 뒤에 다시 시도하세요.", 429)
+    if not auth.verify(request.form.get("password", "")):
+        auth.note_fail(ip)
+        time.sleep(0.8)                  # 대입 시도를 느리게
+        return _login_form("비밀번호가 맞지 않습니다.", 401)
+    auth.note_success(ip)
+    resp = redirect("/")
+    secure = request.is_secure or (request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip() == "https")
+    resp.set_cookie(auth.COOKIE, auth.make_token(), max_age=auth.SESSION_DAYS * 86400,
+                    httponly=True, samesite="Lax", secure=secure, path="/")
+    return resp
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout_page():
+    resp = redirect("/login")
+    resp.delete_cookie("bb_session", path="/")
+    return resp
+
+
+@app.route("/set-password", methods=["GET", "POST"])
+def set_password_page():
+    """공개 접속용 비밀번호 설정·변경. 터널을 거치지 않은 로컬·사설 주소에서만 열린다."""
+    from . import auth
+
+    if not auth.is_private_direct(request):
+        return _auth_page("접근 불가", "<h1>접근할 수 없습니다</h1>"
+                          "<p>비밀번호 설정은 집(같은 Wi-Fi)이나 Tailscale 주소에서만 할 수 있습니다.</p>", 403)
+    has = auth.has_password()
+
+    def form(msg: str = "", ok: str = "", status: int = 200):
+        note = f'<div class="err">{msg}</div>' if msg else (f'<div class="ok">{ok}</div>' if ok else "")
+        cur = ('<label for="cur">현재 비밀번호</label>'
+               '<input id="cur" name="current" type="password" autocomplete="current-password" required>') if has else ""
+        return _auth_page("비밀번호 설정", f"""<h1>🔒 공개 접속 비밀번호 {'변경' if has else '설정'}</h1>
+<p>인터넷 공개 주소로 들어올 때 쓰는 비밀번호입니다. {auth.MIN_LENGTH}자 이상, 다른 곳에서 쓰지 않는 것으로 정하세요.
+집·Tailscale 주소에서는 지금처럼 로그인 없이 씁니다.</p>{note}
+<form method="post" action="/set-password" autocomplete="off">{cur}
+<label for="pw1">새 비밀번호</label>
+<input id="pw1" name="password" type="password" autocomplete="new-password" minlength="{auth.MIN_LENGTH}" required>
+<label for="pw2">새 비밀번호 확인</label>
+<input id="pw2" name="confirm" type="password" autocomplete="new-password" minlength="{auth.MIN_LENGTH}" required>
+<button type="submit">저장</button></form>
+<p style="margin-top:14px"><a href="/">← blogbot으로 돌아가기</a></p>""", status)
+
+    if request.method == "GET":
+        return form()
+    ip = auth.client_ip(request)
+    wait = auth.locked_for(ip)
+    if wait:
+        return form(f"시도가 너무 많습니다. {wait // 60 + 1}분 뒤에 다시 시도하세요.", status=429)
+    if has and not auth.verify(request.form.get("current", "")):
+        auth.note_fail(ip)
+        time.sleep(0.8)
+        return form("현재 비밀번호가 맞지 않습니다.", status=401)
+    pw, pw2 = request.form.get("password", ""), request.form.get("confirm", "")
+    if pw != pw2:
+        return form("새 비밀번호 두 칸이 서로 다릅니다.", status=400)
+    why = auth.check_strength(pw)
+    if why:
+        return form(why, status=400)
+    auth.set_password(pw)
+    auth.note_success(ip)
+    has = True
+    return form(ok="저장했습니다. 이제 공개 주소에서 이 비밀번호로 로그인할 수 있습니다. (기존 로그인은 모두 풀렸습니다)")
 
 
 @app.route("/api/<path:_>", methods=["OPTIONS"])
@@ -1617,6 +1771,9 @@ def api_config():
             "pexels_key": bool(config.PEXELS_API_KEY),
             "kimi_key": bool(config.KIMI_API_KEY),
             "exaone_key": bool(config.EXAONE_API_KEY),
+            "auth": {"password_set": __import__("blogbot.auth", fromlist=["x"]).has_password(),
+                     "public": __import__("blogbot.auth", fromlist=["x"]).is_public(request),
+                     "public_url": config.PUBLIC_URL},
             "kimi_balance": _kimi_balance(),
             "anthropic": __import__("blogbot.llm_guard", fromlist=["status"]).status(),
             "provider_status": {
@@ -1716,6 +1873,25 @@ def _port_in_use(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _start_public_server():
+    """공개 터널 전용 포트(127.0.0.1에만 바인딩). 이 포트로 온 요청은 모두 로그인이 필요하다."""
+    from werkzeug.serving import make_server
+
+    from . import auth
+
+    if _port_in_use(auth.PUBLIC_PORT):
+        print(f"⚠ 공개용 포트 {auth.PUBLIC_PORT}이(가) 이미 사용 중이라 열지 못했습니다.")
+        return
+    try:
+        srv = make_server("127.0.0.1", auth.PUBLIC_PORT, app, threaded=True)
+    except OSError as e:
+        print(f"⚠ 공개용 포트 {auth.PUBLIC_PORT}를 열지 못했습니다: {e}")
+        return
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print(f"🔒 공개 터널용 포트: 127.0.0.1:{auth.PUBLIC_PORT} (비밀번호 로그인 필수"
+          f"{'' if auth.has_password() else ' — 아직 비밀번호 미설정, 전부 차단 중'})")
+
+
 def run_server(port: int = 8765, host: str = "127.0.0.1", open_browser: bool = True):
     global _bind_host
     _bind_host = host
@@ -1744,4 +1920,5 @@ def run_server(port: int = 8765, host: str = "127.0.0.1", open_browser: bool = T
         else:
             print("💡 어디서든 접속: Tailscale 설치 안내는 README-mobile.md 참고")
     threading.Thread(target=_pann_auto_loop, daemon=True).start()
+    _start_public_server()
     app.run(host=host, port=port, debug=False)
