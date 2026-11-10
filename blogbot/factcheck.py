@@ -69,8 +69,11 @@ def _ask_luna(sources: str, post_text: str) -> list:
               "input": ("Return JSON {\"issues\": [{\"quote\", \"problem\", \"fix\"}]}.\n\n"
                         f"<SOURCES>\n{sources}\n</SOURCES>\n\n<POST>\n{post_text}\n</POST>"),
               "text": {"format": {"type": "json_object"}}})
+    from . import llm_guard
     if r.status_code != 200:
+        llm_guard.note_provider_error("openai", r.status_code, r.text)   # 키 만료·크레딧 소진을 상태바에 표시
         raise RuntimeError(f"{config.OPENAI_PROMPT_MODEL} HTTP {r.status_code}: {r.text[:150]}")
+    llm_guard.note_provider_ok("openai")
     d = r.json()
     text = next(c["text"] for o in d.get("output", []) if o.get("type") == "message"
                 for c in o.get("content", []) if c.get("type") == "output_text")
