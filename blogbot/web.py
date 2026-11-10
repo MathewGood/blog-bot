@@ -1342,7 +1342,15 @@ def api_autopilot_start():
                                      f"(가장 빠른 시각 {earliest:%m/%d %H:%M})."}), 400
         if first_at > now + _dt.timedelta(days=14):
             return jsonify({"error": "첫 예약 시각은 14일 이내로 지정하세요."}), 400
-    used_model = config.enforce_model(config.MODEL)
+    # 글쓰기 모델: 비우면 기본 모델. 고른 모델의 API 키가 없으면 시작하지 않는다.
+    req_model = str(data.get("model") or "").strip()
+    if req_model and req_model not in {m[0] for m in config.AVAILABLE_MODELS}:
+        return jsonify({"error": f"지원하지 않는 모델: {req_model}"}), 400
+    used_model = config.enforce_model(req_model or config.MODEL)
+    if config.is_exaone_model(used_model) and not config.EXAONE_API_KEY:
+        return jsonify({"error": "EXAONE_API_KEY가 설정돼 있지 않아 EXAONE으로 쓸 수 없습니다."}), 400
+    if config.is_kimi_model(used_model) and not config.KIMI_API_KEY:
+        return jsonify({"error": "KIMI_API_KEY가 설정돼 있지 않아 Kimi로 쓸 수 없습니다."}), 400
     image_provider = data.get("images")
     try:
         info = autopilot.start(
@@ -1357,6 +1365,8 @@ def api_autopilot_start():
         )
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 409
+    info["model"] = used_model
+    info["model_label"] = dict(config.AVAILABLE_MODELS).get(used_model, used_model).split(" · ")[0]
     return jsonify(info)
 
 

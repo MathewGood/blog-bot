@@ -378,6 +378,10 @@
         <label class="chk">독자
           <select id="apAudience"><option value="">자동 (시간대별)</option>
             <option value="women">40~65세 여성</option><option value="worker">40~65세 직장인</option></select></label>
+        <label class="chk">글쓰기 모델 <select id="apModel" onchange="apModelChanged()"></select></label>
+      </div>
+      <div class="row" id="apModelHint" style="margin-top:4px" hidden>
+        <span class="muted">K-EXAONE은 한 편 생성에 6분 이상 걸립니다(실측). 평균 13분 간격 예약에서는 편수가 많으면 뒤쪽 글의 예약 시각이 밀릴 수 있습니다.</span>
       </div>
       <div class="row" style="margin-top:4px">
         <span class="muted">첫 예약 시각을 직접 고르면 위의 '약 N분 뒤'보다 우선합니다(10분 단위로 올림, 지금부터 15분 뒤~14일 이내). 이후 글은 평균 13분 간격으로 이어집니다.</span>
@@ -617,15 +621,24 @@ function apInitCats() {
   box.innerHTML = Object.entries(AP_CATS).map(([k, v]) =>
     `<label class="chk"><input type="checkbox" class="apCat" value="${k}" checked> ${v}</label>`).join("");
 }
+// 자동 예약의 글쓰기 모델 선택 (고른 값은 이 브라우저에 기억)
+function apModelChanged() {
+  const sel = $("#apModel");
+  if (!sel) return;
+  try { localStorage.setItem("apModel", sel.value); } catch (e) {}
+  const hint = $("#apModelHint");
+  if (hint) hint.hidden = !/^(k-)?exaone/i.test(sel.value);
+}
 async function autopilotStart() {
   const cats = [...document.querySelectorAll(".apCat:checked")].map(x => x.value);
   const r = await fetch("/api/autopilot", {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify({count: +$("#apCount").value, categories: cats, start_in_min: +$("#apStart").value,
                           first_at: $("#apFirstAt").value || "", audience: $("#apAudience").value || "",
+                          model: ($("#apModel") && $("#apModel").value) || "",
                           fill: true})});
   const d = await r.json();
   if (d.error) { alert(d.error); return; }
-  $("#apMsg").textContent = `시작(독자: ${d.audience}): 첫 예약 ${d.first_slot}, 평균 ${d.interval}분 간격 ${d.count}편`;
+  $("#apMsg").textContent = `시작(독자: ${d.audience}, 모델: ${d.model_label || d.model || "기본"}): 첫 예약 ${d.first_slot}, 평균 ${d.interval}분 간격 ${d.count}편`;
   apRefresh();
 }
 async function autopilotStop() { await fetch("/api/autopilot/stop", {method: "POST"}); apRefresh(); }
@@ -700,6 +713,19 @@ async function loadStatus() {
     const suffix = noKimi ? " · KIMI_API_KEY 없음" : (noExa ? " · EXAONE_API_KEY 없음" : "");
     return `<option value="${m.id}" ${m.id === c.model ? "selected" : ""}${disabled ? " disabled" : ""}>${m.label}${suffix}</option>`;
   }).join("");
+  // 자동 예약 탭의 글쓰기 모델 (같은 목록, 키 없는 모델은 비활성, 마지막 선택 기억)
+  const apSel = $("#apModel");
+  if (apSel) {
+    let savedM = null; try { savedM = localStorage.getItem("apModel"); } catch (e) {}
+    const usable = (id) => !(isKimi(id) && !c.kimi_key) && !(isExaone(id) && !c.exaone_key);
+    const pick = (savedM && (c.models || []).some(m => m.id === savedM) && usable(savedM)) ? savedM : c.model;
+    apSel.innerHTML = (c.models || []).map(m => {
+      const noKimi = isKimi(m.id) && !c.kimi_key, noExa = isExaone(m.id) && !c.exaone_key;
+      const suffix = noKimi ? " · KIMI_API_KEY 없음" : (noExa ? " · EXAONE_API_KEY 없음" : "");
+      return `<option value="${m.id}"${m.id === pick ? " selected" : ""}${(noKimi || noExa) ? " disabled" : ""}>${m.label}${suffix}</option>`;
+    }).join("");
+    apModelChanged();
+  }
   // 사진 공급원 드롭다운 (OpenAI 키가 없으면 AI 생성은 비활성)
   const imgSel = $("#genImages");
   if (imgSel) {
