@@ -6,6 +6,7 @@ kimi-* / moonshot-* 모델을 선택하면 Anthropic 대신 Moonshot AI(OpenAI �
 from __future__ import annotations
 
 import json
+import time
 import re
 import threading
 
@@ -365,9 +366,20 @@ def _generate_post(
 
     # EXAONE 분기 (LG AI연구원, OpenAI 호환) — Anthropic 클라이언트 초기화조차 하지 않음
     if config.is_exaone_model(selected_model):
-        return _generate_with_exaone(
-            article_text, category_ko, extra_note, selected_model, research_brief
-        )
+        try:
+            return _generate_with_exaone(
+                article_text, category_ko, extra_note, selected_model, research_brief
+            )
+        except ProviderBusy as e:
+            # 재시도(최대 약 6분)로도 EXAONE이 풀리지 않으면 글 한 편이 통째로 실패하지 않게 Kimi로 대신 쓴다
+            if not config.KIMI_API_KEY:
+                raise
+            post = _generate_with_kimi(
+                article_text, category_ko, extra_note, config.FALLBACK_MODEL, research_brief
+            )
+            post["fallback_from"] = selected_model
+            post["fallback_reason"] = f"EXAONE 서비스 과부하: {str(e)[:80]}"
+            return post
 
     # Kimi/Moonshot 분기 — Anthropic 클라이언트 초기화조차 하지 않음
     if config.is_kimi_model(selected_model):
@@ -552,6 +564,28 @@ def _generate_with_kimi(
                        "temperature": 1 if model.startswith("kimi") else 0.6})
 
 
+class ProviderBusy(RuntimeError):
+    """외부 모델 서비스가 과부하(429·5xx)로 재시도 끝에도 응답하지 못함."""
+
+
+# 서비스 과부하 재시도: 429(전체 동시 요청 초과 포함)·502/503/504는 잠시 뒤 다시 시도한다.
+_BUSY_STATUS = (429, 500, 502, 503, 504)
+_BUSY_WAITS = (15, 30, 45, 60, 90, 120)   # 초 — 최대 약 6분. retry-after 헤더가 있으면 그 값을 우선
+
+
+def _busy_wait(r, attempt: int) -> float:
+    try:
+        ms = r.headers.get("retry-after-ms")
+        if ms:
+            return min(max(float(ms) / 1000, 1.0), 300.0)
+        ra = r.headers.get("retry-after")
+        if ra:
+            return min(max(float(ra), 1.0), 300.0)
+    except ValueError:
+        pass
+    return float(_BUSY_WAITS[min(attempt, len(_BUSY_WAITS) - 1)])
+
+
 def _generate_with_exaone(
     article_text: str,
     category_ko: str,
@@ -635,16 +669,34 @@ def _generate_openai_compat(
         "stream": True,
         **extra_payload,
     }
-    r = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=(30, 120),  # (연결, 청크 간 최대 간격)
-        stream=True,
-    )
+    r = None
+    for attempt in range(len(_BUSY_WAITS) + 1):
+        try:
+            r = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=(30, 120),  # (연결, 청크 간 최대 간격)
+                stream=True,
+            )
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt >= len(_BUSY_WAITS):
+                raise ProviderBusy(f"{label} 연결 실패(재시도 소진): {str(e)[:120]}")
+            time.sleep(_busy_wait(type("R", (), {"headers": {}})(), attempt))
+            continue
+        if r.status_code in _BUSY_STATUS:
+            if attempt >= len(_BUSY_WAITS):
+                raise ProviderBusy(f"{label} 서비스 과부하 {r.status_code} (재시도 {attempt}회 소진): "
+                                   f"{r.text[:150]}")
+            wait = _busy_wait(r, attempt)
+            print(f"  · {label} 서비스 과부하({r.status_code}) — {wait:.0f}초 뒤 재시도 ({attempt + 1}/{len(_BUSY_WAITS)})")
+            r.close()
+            time.sleep(wait)
+            continue
+        break
     if r.status_code == 401:
         raise RuntimeError(f"{label} 인증 실패 (401). {key_name}가 유효한지 확인하세요.")
     if not r.ok:
