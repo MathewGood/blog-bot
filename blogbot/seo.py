@@ -23,6 +23,31 @@ PARA_TARGET = 90
 
 _NUM = re.compile(r"\d[\d,\.]*")
 
+# 첫 문단(검색 결과 미리보기) 기준
+INTRO_RANGE = (45, 125)
+INTRO_ANCHOR_START = 24    # 앵커가 첫 문단 앞 몇 글자(공백 제외, 공백 포함 약 30자) 안에서 시작해야 하는가
+_FIRST_PERSON = re.compile(r"(?<![가-힣])(저는|제가|저희|우리는|우리가|내가|나는)")
+
+
+def _squash(s: str) -> str:
+    """띄어쓰기·기호를 없앤 비교용 문자열."""
+    return re.sub(r"[\s\W_]+", "", s or "")
+
+
+def first_paragraph(post: dict) -> str:
+    secs = post.get("sections") or []
+    if not secs:
+        return ""
+    paras = [p.strip() for p in (secs[0].get("body_md") or "").split("\n\n") if p.strip()]
+    return paras[0] if paras else ""
+
+
+def intro_has_anchor(para: str, anchor: str) -> bool:
+    """첫 문단 앞쪽에 앵커(검색 키워드)가 그대로 들어 있는가."""
+    a = _squash(anchor)
+    i = _squash(para).find(a) if a else -1
+    return 0 <= i <= INTRO_ANCHOR_START
+
 
 # ─────────────────────────────────────────────────────────────
 # 1) 모바일 3행 분절 룰
@@ -71,6 +96,7 @@ _PROMPT = """한국 네이버 블로그(독자: {audience}) 글이 완성됐다.
 본문에 없는 사실·숫자·고유명사는 절대 만들지 않는다. 본문에 이미 있는 내용을 다시 정리할 뿐이다.
 
 [현재 제목] {title}
+[현재 첫 문단] {intro_now}
 [분야] {category}
 [소재 키워드] {hint}
 [태그] {tags}
@@ -81,8 +107,10 @@ _PROMPT = """한국 네이버 블로그(독자: {audience}) 글이 완성됐다.
 만들 것:
 1. anchor — 검색 앵커 명사구. 독자가 네이버에 실제로 입력할 만한 핵심 검색어({a0}~{a1}자).
    본문이 다루는 대상·제도·증상·현상을 가리키는 명사구로 쓴다(예: "증여세 면제 한도", "식후 걷기 혈당", "바이낸스 해킹 사태").
+   기사 속 영문 표기·약어보다 한국 독자가 실제로 검색하는 말을 고른다. [소재 키워드]가 있으면 그 키워드를 그대로 쓰거나 가장 가까운 검색어로 한다.
    조사·서술어로 끝내지 않는다. 따옴표·이모지 금지.
-2. hook — 클릭을 부르는 후킹 문구({h0}~{h1}자). 본문의 실제 사실(조건·숫자·대비)에서 뽑는다.
+2. hook — 클릭을 부르는 후킹 문구({h0}~{h1}자, anchor와 합쳐 38자 안팎이 이상적). 본문의 실제 사실(조건·숫자·대비)에서 뽑는다.
+   검색자가 함께 찾는 연관 낱말(방법·기준·조건·비용·이유·차이 중 본문에 맞는 것) 하나를 자연스럽게 넣는다. anchor의 낱말을 되풀이하지 않는다.
    금지: 충격·경악·난리 같은 낚시어, 물음표 남발, "내돈내산"·"직접 써 보니" 같은 필자 경험 암시, 효과·완치 보장,
    의약·건강 효능 단정. 불안을 자극하지 않는다.
 3. summary — '30초 요약' 3줄. 글의 핵심 결론 3가지를 각 25~60자, ~다 체로. 독자가 얻는 정보·행동 중심. 이 3줄만 읽어도 요지를 알 수 있어야 한다.
@@ -90,9 +118,14 @@ _PROMPT = """한국 네이버 블로그(독자: {audience}) 글이 완성됐다.
    headers 2~3개, rows 3~6행, 각 칸 40자 이내. checklist면 첫 열에 점검 항목, 둘째 열에 확인할 내용을 쓴다.
    표에 쓰는 숫자는 반드시 본문에 있는 것만.
 5. question — 글 끝에서 독자의 의견·경험을 묻는 질문 한 문장(60자 이내, 물음표로 끝). 본문 주제와 직결되게.
+6. intro — 검색 결과 미리보기로 노출될 새 첫 문단 2문장({i0}~{i1}자, ~다 체, 관찰자 시점).
+   - 첫 문장 맨 앞쪽(앞 30자 안)에 anchor를 **한 글자도 바꾸지 말고 그대로** 넣고, "anchor은/는/이/가 ~다" 꼴로 이 글이 답하는 핵심(대상·조건·결론)을 쓴다.
+   - 둘째 문장에는 독자가 이 글에서 얻을 정보를 구체적으로 쓴다. 태그의 연관 낱말을 한두 개 자연스럽게 섞되 anchor는 이 문단에서 두 번 넘게 쓰지 않는다.
+   - 이 문단 바로 뒤에 [현재 첫 문단]이 이어진다. 그 문단과 같은 말을 되풀이하지 말고, 이어 읽어도 어색하지 않게 쓴다.
+   - 숫자·고유명사는 본문에 있는 것만. 질문·낚시어·"알아보겠습니다" 같은 정형 서두·1인칭 금지.
 
 JSON만 출력:
-{{"anchor":"","hook":"","summary":["","",""],"table":{{"kind":"compare","title":"표 제목(20자 이내)","headers":["",""],"rows":[["",""]]}},"question":""}}"""
+{{"anchor":"","hook":"","intro":"","summary":["","",""],"table":{{"kind":"compare","title":"표 제목(20자 이내)","headers":["",""],"rows":[["",""]]}},"question":""}}"""
 
 
 def _ask(prompt: str) -> str:
@@ -150,6 +183,10 @@ def _supported(text: str, body_nums: set, body: str = "") -> bool:
     return not _unsupported(text, body_nums, body)
 
 
+def _norm_tag(t: str) -> str:
+    return re.sub(r"\s+", "", str(t)).lower()
+
+
 def _clean(s) -> str:
     return re.sub(r"\s+", " ", str(s or "")).strip().strip("\"'“”‘’")
 
@@ -162,6 +199,55 @@ def build_title(anchor: str, hook: str) -> str:
         return ""
     title = f"{anchor}{TITLE_SEP}{hook}"
     return title if len(title) <= TITLE_MAX else ""
+
+
+def _valid_intro(raw, anchor: str, body_nums: set, body: str) -> str:
+    """검색용 첫 문단 검증. 통과하면 정리된 문단, 아니면 빈 문자열."""
+    intro = _clean(raw)
+    if not (intro and anchor and INTRO_RANGE[0] <= len(intro) <= INTRO_RANGE[1]):
+        return ""
+    ok = (intro_has_anchor(intro, anchor)
+          and _squash(intro).count(_squash(anchor)) <= 2          # 키워드 도배 금지
+          and intro.endswith((".", "다", "다.")) and "?" not in intro
+          and not _FIRST_PERSON.search(intro) and "**" not in intro
+          and not re.search(r"[\U0001F300-\U0001FAFF]", intro)
+          and _supported(intro, body_nums, body))
+    return intro if ok else ""
+
+
+_INTRO_PROMPT = """한국 네이버 블로그(독자: {audience}) 글의 '검색용 첫 문단'만 새로 쓴다. 본문에 없는 사실·숫자는 만들지 않는다.
+
+[핵심 검색어] {anchor}
+[현재 첫 문단] {intro_now}
+[태그] {tags}
+
+[본문]
+{body}
+
+쓸 것: 새 첫 문단 2문장({i0}~{i1}자, ~다 체, 관찰자 시점).
+- 첫 문장 맨 앞쪽(앞 30자 안)에 [핵심 검색어]를 한 글자도 바꾸지 말고 그대로 넣고, "검색어은/는/이/가 ~다" 꼴로 글이 답하는 핵심(대상·조건·결론)을 쓴다.
+- 둘째 문장은 독자가 얻을 정보를 구체적으로. 태그의 연관 낱말을 한두 개 섞되 검색어는 두 번 넘게 쓰지 않는다.
+- 이 문단 바로 뒤에 [현재 첫 문단]이 이어진다. 같은 말을 되풀이하지 않는다.
+- 질문·낚시어·"알아보겠습니다" 같은 정형 서두·1인칭 금지.
+
+JSON만 출력: {{"intro":""}}"""
+
+
+def _intro_only(post: dict, anchor: str, intro_now: str, body: str, aud: str) -> str:
+    """제목 공식은 못 맞췄어도 기존 제목의 앵커로 첫 문단만 만든다. 실패하면 빈 문자열."""
+    body_nums = _nums(body)
+    prompt = _INTRO_PROMPT.format(audience=aud, anchor=anchor, intro_now=intro_now[:400] or "(없음)",
+                                  tags=", ".join(post.get("tags", [])), body=body,
+                                  i0=INTRO_RANGE[0], i1=INTRO_RANGE[1])
+    for _ in range(2):
+        try:
+            m = re.search(r"\{.*\}", _ask(prompt), re.S)
+            intro = _valid_intro((json.loads(m.group(0)) if m else {}).get("intro"), anchor, body_nums, body)
+        except Exception:
+            intro = ""
+        if intro:
+            return intro
+    return ""
 
 
 def _validate(data: dict, body: str) -> dict:
@@ -193,6 +279,9 @@ def _validate(data: dict, body: str) -> dict:
     q = _clean(data.get("question"))
     if 8 <= len(q) <= 80 and q.endswith("?"):
         out["question"] = q
+    intro = _valid_intro(data.get("intro"), _clean(data.get("anchor")), body_nums, body)
+    if intro:
+        out["intro"] = intro
     return out
 
 
@@ -208,7 +297,9 @@ def finalize(post: dict, hint: str = "", log=None) -> dict:
 
     body = _body_text(post)
     aud = config.AUDIENCES.get(post.get("audience") or "women", config.AUDIENCES["women"])["label"]
+    intro_now = first_paragraph(post)
     prompt = _PROMPT.format(audience=aud, title=post.get("title", ""), category=post.get("category", ""),
+                            intro_now=intro_now[:400] or "(없음)", i0=INTRO_RANGE[0], i1=INTRO_RANGE[1],
                             hint=hint or "(없음 — 본문에서 판단)", tags=", ".join(post.get("tags", [])),
                             body=body, a0=ANCHOR_RANGE[0], a1=ANCHOR_RANGE[1], h0=HOOK_RANGE[0], h1=HOOK_RANGE[1])
     got: dict = {}
@@ -222,17 +313,32 @@ def finalize(post: dict, hint: str = "", log=None) -> dict:
             data = {}
         data["title_old"] = post.get("title", "")
         got = _validate(data, body)
+        # 첫 문단은 현재 문단에 앵커가 이미 있으면 새로 만들 필요가 없다
+        need_intro = not (got.get("anchor") and intro_has_anchor(intro_now, got["anchor"]))
         missing = [k for k in ("title", "summary", "table", "question") if k not in got]
+        if need_intro and "intro" not in got and "title" in got:
+            missing.append("intro")
         if not missing:
             break
         feedback = ("\n\n[이전 시도에서 기준을 못 맞춘 요소: " + ", ".join(missing) + "] "
                     "숫자는 본문에 적힌 표기 그대로만 쓰고(어림·반올림·환산 금지), 본문에 없으면 숫자를 빼고 쓴다. "
                     "글자 수 범위도 지킨다.")
+        if "intro" in missing:
+            feedback += (" intro는 2문장 " + f"{INTRO_RANGE[0]}~{INTRO_RANGE[1]}자, 첫 문장 앞쪽에 anchor를 그대로 넣고, "
+                         "~다 체로 끝내며, 물음표·1인칭·본문에 없는 숫자를 쓰지 않는다.")
         if "title" in missing:
             bad = got.get("_bad_title_nums")
             feedback += (f" 제목에 쓴 숫자·수량 표현 {bad}는 본문에 없다." if bad else " 제목이 글자 수·형식 기준을 못 맞췄다.") + \
                 " 후킹 문구에는 숫자·수량 표현을 쓰지 말고, 본문의 대비·이유·조건으로 만든다."
     got.pop("_bad_title_nums", None)
+    fb_anchor = ""
+    if "title" not in got and post.get("sections"):
+        old_title = post.get("title") or ""
+        head = old_title.split(TITLE_SEP)[0].strip() if TITLE_SEP in old_title else ""
+        if ANCHOR_RANGE[0] <= len(head) <= ANCHOR_RANGE[1] and not intro_has_anchor(intro_now, head):
+            intro_fb = _intro_only(post, head, intro_now, body, aud)
+            if intro_fb:
+                got["intro"], fb_anchor = intro_fb, head
     if not got:
         emit("  ⚠ 검색용 구성(제목·요약·표) 생성 실패 — 문단 나누기만 적용")
         return post
@@ -252,6 +358,17 @@ def finalize(post: dict, hint: str = "", log=None) -> dict:
         emit(f"  ✓ 제목(앵커 + 후킹): {got['title']}")
     else:
         emit("  ⚠ 제목 공식 조건 불충족 — 원래 제목 유지")
+    anchor_now = got.get("anchor") or fb_anchor
+    if anchor_now:
+        if intro_has_anchor(intro_now, anchor_now):
+            emit(f"  ✓ 첫 문단에 검색어 '{anchor_now}' 이미 포함")
+        elif got.get("intro") and post.get("sections"):
+            sec0 = post["sections"][0]
+            sec0["body_md"] = got["intro"] + "\n\n" + (sec0.get("body_md") or "").lstrip()
+            post["intro_added"] = got["intro"]
+            emit(f"  ✓ 첫 문단에 검색어 '{anchor_now}' 삽입 (장면 문단은 그 뒤로)")
+        else:
+            emit(f"  ⚠ 첫 문단 검색어 삽입 실패 — 기존 첫 문단 유지")
     if got.get("summary"):
         post["summary"] = got["summary"]
         emit("  ✓ 30초 요약 카드 3줄")

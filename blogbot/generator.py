@@ -18,7 +18,7 @@ from . import config
 POST_SCHEMA = {
     "type": "object",
     "properties": {
-        "title": {"type": "string", "description": "블로그 글 제목 (한글). '검색 앵커 명사구 : 후킹 문구' 형식(예: '증여세 면제 한도 : 부모님 비상금 이체 전에 알아둘 3가지'), 전체 50자 이내"},
+        "title": {"type": "string", "description": "블로그 글 제목 (한글). '검색 앵커 명사구 : 후킹 문구' 형식(예: '증여세 면제 한도 : 부모님 비상금 이체 전에 알아둘 3가지'). 앵커(독자가 검색창에 칠 핵심 검색어)를 맨 앞에 두고 전체 38자 안팎(최대 50자). 첫 섹션 첫 문단 첫 문장에 이 앵커를 그대로 넣는다"},
         "slug": {
             "type": "string",
             "description": "영문 소문자 kebab-case 슬러그 (예: why-koreans-love-coffee)",
