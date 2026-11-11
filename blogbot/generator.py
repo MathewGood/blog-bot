@@ -571,6 +571,9 @@ class ProviderBusy(RuntimeError):
 # 서비스 과부하 재시도: 429(전체 동시 요청 초과 포함)·502/503/504는 잠시 뒤 다시 시도한다.
 _BUSY_STATUS = (429, 500, 502, 503, 504)
 _BUSY_WAITS = (15, 30, 45, 60, 90, 120)   # 초 — 최대 약 6분. retry-after 헤더가 있으면 그 값을 우선
+_BUSY_TOTAL = 480       # 초 — 과부하 대기에 쓰는 총 시간 상한(넘기면 포기하고 다른 모델로)
+_STREAM_MAX = 900       # 초 — 응답 스트림 전체 상한. 생각 중 신호만 계속 오는 무한 대기를 막는다(정상은 약 6분)
+_STALL_RETRIES = 1      # 응답이 아예 없는(무응답·연결 끊김) 경우의 재시도 횟수 — 오래 기다려도 낫지 않는 경우가 많다
 
 
 def _busy_wait(r, attempt: int) -> float:
@@ -670,6 +673,8 @@ def _generate_openai_compat(
         **extra_payload,
     }
     r = None
+    t_start = time.time()
+    stalls = 0
     for attempt in range(len(_BUSY_WAITS) + 1):
         try:
             r = requests.post(
@@ -683,15 +688,21 @@ def _generate_openai_compat(
                 stream=True,
             )
         except (requests.ConnectionError, requests.Timeout) as e:
-            if attempt >= len(_BUSY_WAITS):
-                raise ProviderBusy(f"{label} 연결 실패(재시도 소진): {str(e)[:120]}")
-            time.sleep(_busy_wait(type("R", (), {"headers": {}})(), attempt))
+            # 무응답은 기다려도 풀리지 않는 경우가 많다 — 한 번만 더 시도하고 곧바로 다른 모델로 넘긴다
+            stalls += 1
+            if stalls > _STALL_RETRIES or attempt >= len(_BUSY_WAITS):
+                raise ProviderBusy(f"{label} 응답 없음(연결·무응답 {stalls}회): {str(e)[:100]}")
+            print(f"  · {label} 응답 없음 — 15초 뒤 재시도")
+            time.sleep(15)
             continue
         if r.status_code in _BUSY_STATUS:
             if attempt >= len(_BUSY_WAITS):
                 raise ProviderBusy(f"{label} 서비스 과부하 {r.status_code} (재시도 {attempt}회 소진): "
                                    f"{r.text[:150]}")
             wait = _busy_wait(r, attempt)
+            if time.time() - t_start + wait > _BUSY_TOTAL:
+                raise ProviderBusy(f"{label} 서비스 과부하 {r.status_code} ({_BUSY_TOTAL // 60}분 넘게 대기): "
+                                   f"{r.text[:120]}")
             print(f"  · {label} 서비스 과부하({r.status_code}) — {wait:.0f}초 뒤 재시도 ({attempt + 1}/{len(_BUSY_WAITS)})")
             r.close()
             time.sleep(wait)
@@ -707,23 +718,32 @@ def _generate_openai_compat(
     r.encoding = "utf-8"
     chunks = []
     finish = None
-    for raw in r.iter_lines(decode_unicode=True):
-        if not raw or not raw.startswith("data:"):
-            continue
-        payload_line = raw[5:].strip()
-        if payload_line == "[DONE]":
-            break
-        try:
-            evt = json.loads(payload_line)
-        except json.JSONDecodeError:
-            continue
-        ch = (evt.get("choices") or [{}])[0]
-        delta = ch.get("delta") or {}
-        piece = delta.get("content")
-        if piece:
-            chunks.append(piece)
-        if ch.get("finish_reason"):
-            finish = ch["finish_reason"]
+    t_stream = time.time()
+    try:
+        for raw in r.iter_lines(decode_unicode=True):
+            if time.time() - t_stream > _STREAM_MAX:
+                raise ProviderBusy(f"{label} 응답이 {_STREAM_MAX // 60}분 넘게 끝나지 않음({len(chunks)}조각 수신)")
+            if not raw or not raw.startswith("data:"):
+                continue
+            payload_line = raw[5:].strip()
+            if payload_line == "[DONE]":
+                break
+            try:
+                evt = json.loads(payload_line)
+            except json.JSONDecodeError:
+                continue
+            ch = (evt.get("choices") or [{}])[0]
+            delta = ch.get("delta") or {}
+            piece = delta.get("content")
+            if piece:
+                chunks.append(piece)
+            if ch.get("finish_reason"):
+                finish = ch["finish_reason"]
+    except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as e:
+        # 생성 도중 스트림이 멈추거나 끊김 — 반쪽 JSON은 쓸 수 없으니 다른 모델로 넘긴다
+        raise ProviderBusy(f"{label} 응답 중 끊김({len(chunks)}조각 수신): {str(e)[:100]}")
+    finally:
+        r.close()
     text = "".join(chunks)
     if not text.strip():
         raise RuntimeError(f"{label} 스트림에서 본문을 받지 못했습니다.")
