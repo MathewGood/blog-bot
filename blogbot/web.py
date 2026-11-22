@@ -1539,6 +1539,17 @@ def _pann_auto_tick():
     if autopilot.snapshot().get("running"):
         pann_feed.auto_save(message="자동 예약이 진행 중이라 끝나면 이어서 씁니다")
         return
+    try:
+        import datetime as _dt
+
+        from . import schedule
+
+        nxt, _ = schedule.next_run()
+        if schedule.load()["enabled"] and nxt and _dt.timedelta(0) <= nxt - _dt.datetime.now() <= _dt.timedelta(minutes=25):
+            pann_feed.auto_save(message=f"정기 자동 예약({nxt:%H:%M}) 직전이라 그 뒤에 씁니다")
+            return
+    except Exception:
+        pass
     if not config.NAVER_BLOG_ID or not naver.session_status()["ok"]:
         pann_feed.auto_save(message="네이버 로그인이 필요합니다")
         return
@@ -1555,6 +1566,76 @@ def _pann_auto_tick():
     import datetime as _dt
     pann_feed.auto_save(last_cycle=time.time(), last_snapshot=why,
                         message=f"{_dt.datetime.now():%m-%d %H:%M} 판 사연 한 편 작성 시작")
+
+
+# ── 평일 정기 자동 예약 (blogbot/schedule.py): 06:30·17:30에 30~40대 직장인 10편 ──
+_SCHEDULE_TICK_SEC = 30
+
+
+def _schedule_tick():
+    import datetime as _dt
+
+    from . import autopilot, naver, schedule
+
+    now = _dt.datetime.now()
+    schedule.expire_missed(now)
+    key, _at = schedule.due(now)
+    if not key:
+        return
+    st = schedule.load()
+    why = schedule.skip_reason(now.date(), st)
+    if why:
+        schedule.mark(key, "skipped", f"{why} — 건너뜀")
+        return
+    if autopilot.snapshot().get("running"):
+        schedule.mark(key, "waiting", "다른 자동 예약이 진행 중 — 끝나면 시작")
+        return
+    if not config.NAVER_BLOG_ID or not naver.session_status()["ok"]:
+        schedule.mark(key, "waiting", "네이버 로그인이 필요합니다")
+        return
+    used_model = config.enforce_model(config.MODEL)
+    try:
+        info = autopilot.start(
+            int(st["count"]), list(config.CATEGORIES),
+            generate_fn=lambda q, c, a, aud, sid=None: _autopilot_generate(q, c, a, used_model, None, aud, sid),
+            publish_fn=_autopilot_publish,
+            interval=int(st["interval"]),
+            audience=st["audience"],
+            fill=True,
+            first_at=now + _dt.timedelta(minutes=int(st["lead_min"])),
+        )
+    except RuntimeError as e:
+        schedule.mark(key, "waiting", str(e))
+        return
+    label = dict(config.AVAILABLE_MODELS).get(used_model, used_model).split(" · ")[0]
+    schedule.mark(key, "started", f"{info['count']}편 · {info['audience']} · 첫 예약 {info['first_slot']} · {label}")
+    print(f"[schedule] {key} 정기 자동 예약 시작 — 첫 예약 {info['first_slot']}")
+
+
+def _schedule_loop():
+    time.sleep(20)
+    while True:
+        try:
+            _schedule_tick()
+        except Exception as e:
+            print(f"[schedule] 점검 오류: {e}")
+        time.sleep(_SCHEDULE_TICK_SEC)
+
+
+@app.get("/api/autopilot-schedule")
+def api_schedule_get():
+    from . import schedule
+
+    return jsonify(schedule.summary())
+
+
+@app.post("/api/autopilot-schedule")
+def api_schedule_set():
+    from . import schedule
+
+    data = request.get_json(force=True) or {}
+    schedule.save(enabled=bool(data.get("enabled")))
+    return jsonify(schedule.summary())
 
 
 def _pann_auto_loop():
@@ -1920,5 +2001,6 @@ def run_server(port: int = 8765, host: str = "127.0.0.1", open_browser: bool = T
         else:
             print("💡 어디서든 접속: Tailscale 설치 안내는 README-mobile.md 참고")
     threading.Thread(target=_pann_auto_loop, daemon=True).start()
+    threading.Thread(target=_schedule_loop, daemon=True).start()
     _start_public_server()
     app.run(host=host, port=port, debug=False)

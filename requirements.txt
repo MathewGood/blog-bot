@@ -6,3 +6,4 @@ feedparser>=6.0
 markdown>=3.5
 playwright>=1.44
 flask>=3.0
+holidays>=0.60

@@ -201,6 +201,9 @@ AUDIENCES = {
               "image": "Korean women in their 40s-60s and their families"},
     "worker": {"label": "40~65세 직장인",
                "image": "Korean office workers in their 40s-60s (commuters, offices, meetings, cafes)"},
+    # 2026-11-22 사용자 지정: 평일 정기 자동 예약(06:30·17:30)의 독자
+    "worker_young": {"label": "30~40대 직장인",
+                     "image": "Korean office workers in their 30s-40s (commuters, offices, meetings, cafes, young families)"},
 }
 
 

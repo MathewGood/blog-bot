@@ -110,7 +110,10 @@ _STORY_AUD = {
               "시어머니·남편·자녀·친구 사이의 엇갈림처럼 집과 가족 안의 장면이 잘 통한다."),
     "worker": ("직장생활을 오래 한 40~65세 직장인",
                "상사·동료·후배, 회식, 출퇴근, 월급과 가계 같은 직장·생활 장면이 잘 통한다."),
+    "worker_young": ("커리어를 쌓아 가는 30~40대 직장인",
+                     "팀장·동료, 이직과 연봉, 맞벌이와 육아, 내 집 마련과 대출 같은 직장·생활 장면이 잘 통한다."),
 }
+_PERSONA_FILE = {"worker": "audience_worker.md", "worker_young": "audience_worker_young.md"}
 
 
 def _story_mode() -> bool:
@@ -131,9 +134,9 @@ def _style_text() -> str:
         text = (config.ROOT / "prompts" / fname).read_text(encoding="utf-8")
         return text.replace("{독자결}", hint).replace("{독자}", who)
     style = config.STYLE_GUIDE.read_text(encoding="utf-8")
-    if _audience() == "worker":
+    if _audience() in _PERSONA_FILE:
         a, b = style.index("## 페르소나"), style.index("## 잡지 피처의 문법")
-        worker = (config.ROOT / "prompts" / "audience_worker.md").read_text(encoding="utf-8")
+        worker = (config.ROOT / "prompts" / _PERSONA_FILE[_audience()]).read_text(encoding="utf-8")
         style = style[:a] + worker + "\n" + style[b:]
     # 트렌드·뉴스 해설은 돈과 자본의 흐름으로 원인·전망을 분석한다
     money = (config.ROOT / "prompts" / "money_lens.md").read_text(encoding="utf-8")

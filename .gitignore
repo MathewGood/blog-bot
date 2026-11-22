@@ -21,3 +21,5 @@ inbox/
 usage_log.jsonl
 .auth.json
 .auth.tmp
+autopilot_schedule.json
+autopilot_schedule.tmp

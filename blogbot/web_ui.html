@@ -363,6 +363,12 @@
   <!-- ⑤ 자동 예약 -->
   <section class="panel" id="panel-auto">
     <div class="card">
+      <h3>📅 평일 정기 자동 예약</h3>
+      <label class="chk"><input type="checkbox" id="schedOn" onchange="schedSet(this.checked)"> 켜기</label>
+      <div id="schedInfo" class="muted" style="margin-top:4px"></div>
+      <div id="schedRecent" class="muted" style="margin-top:4px;font-size:12px"></div>
+    </div>
+    <div class="card">
       <h3>소재 찾기 + 13분 간격 예약 발행</h3>
       <p>소재의 80%는 <b>구글 트렌드(4시간·활성 항목만·관련성순) 1~20위</b>에서 <b>한국 5 : 미국 3 : 일본 2</b> 비율로 고릅니다(한국은 구글 1~20위와 <b>다음 실시간 키워드의 합집합</b>에서 고르며, 양쪽에 오른 이슈를 우선 고려). 20%는 <b>뉴욕타임스</b> 글감입니다.
          트렌드·NYT 글이 모자랄 때만 ② 탭 <b>💬 사연으로 쓰기</b> 대기열의 사연이 맨 끝에 채워집니다.
@@ -377,7 +383,8 @@
         <button class="ghost" type="button" onclick="document.getElementById('apFirstAt').value=''">지정 해제</button>
         <label class="chk">독자
           <select id="apAudience"><option value="">자동 (시간대별)</option>
-            <option value="women">40~65세 여성</option><option value="worker">40~65세 직장인</option></select></label>
+            <option value="women">40~65세 여성</option><option value="worker">40~65세 직장인</option>
+            <option value="worker_young">30~40대 직장인</option></select></label>
         <label class="chk">글쓰기 모델 <select id="apModel" onchange="apModelChanged()"></select></label>
       </div>
       <div class="row" id="apModelHint" style="margin-top:4px" hidden>
@@ -1008,6 +1015,25 @@ async function loadStories() {
       : '<span class="muted">대기열이 비어 있습니다.</span>';
   } catch (e) {}
 }
+async function schedLoad() {
+  let d;
+  try { d = await (await fetch("/api/autopilot-schedule")).json(); } catch (e) { return; }
+  $("#schedOn").checked = !!d.enabled;
+  $("#schedInfo").textContent =
+    `${d.weekdays}요일 ${d.slots.join(" · ")}에 ${d.audience} 대상 ${d.count}편 — 시작 약 ${d.lead_min}분 뒤부터 평균 ${d.interval}분 간격 예약` +
+    (d.skip_holidays ? " · 공휴일 건너뜀" : "") +
+    (d.enabled ? (d.next ? ` | 다음 실행: ${d.next}` : "") : " | 꺼져 있음") +
+    ((d.skipped_holidays || []).length ? ` (건너뜀: ${d.skipped_holidays.join(", ")})` : "");
+  const label = {started: "✓ 시작", skipped: "· 건너뜀", waiting: "… 대기", missed: "⚠ 놓침"};
+  $("#schedRecent").textContent = (d.recent || []).length
+    ? "최근: " + d.recent.map(r => `${r.slot.slice(5)} ${label[r.status] || r.status}${r.message ? " (" + r.message + ")" : ""}`).join(" / ")
+    : "";
+}
+async function schedSet(on) {
+  await fetch("/api/autopilot-schedule", {method: "POST", headers: {"Content-Type": "application/json"},
+                                          body: JSON.stringify({enabled: on})});
+  schedLoad();
+}
 async function pannAutoLoad() {
   try {
     const d = await (await fetch("/api/pann/auto")).json();
@@ -1328,6 +1354,8 @@ $("#liveIndicator").addEventListener("click", () => {
 
 loadStatus();
 loadUsage();
+schedLoad();
+setInterval(schedLoad, 60000);
 loadTopics();
 refreshConsole();
 </script>
