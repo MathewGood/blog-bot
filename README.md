@@ -134,7 +134,7 @@ OpenClaw이 글감 검색 → 기사 확보 → `inbox/`에 저장 → 생성 �
 |---|---|---|---|
 | 검색어 만들기·조사 브리프 | Haiku 5.5 ($0.10/$0.50) | Kimi K2.6 ($0.95/$4) | 브리프를 Kimi 우선에서 Haiku 우선으로 바꿈 |
 | 웹 검색 | Kimi Search Pro (호출당 약 $0.003) | Haiku 웹 검색 ($10/1000회) | 자동 예약 소재 검색은 6시간 캐시 |
-| 글쓰기(기본) | Haiku 5.5 · effort medium | — | 편당 약 $0.01. EXAONE(무료)·Kimi는 선택 가능 |
+| 글쓰기(기본) | K-EXAONE 2.5 (무료, 약 6분) | Haiku 5.5 · effort medium (편당 약 $0.01) | EXAONE 키가 없으면 Haiku가 기본. `.env`의 `BLOG_MODEL`로 변경 |
 | EXAONE 과부하 시 | Haiku 5.5 | Kimi K2.6 | Kimi로 쓴 글만 교정 단계를 거침 |
 | 제목·요약·표·교정·사진 고르기 | Haiku 5.5 · effort low | Kimi K2.6 | |
 | 사실 검증·사진 프롬프트 | Haiku 5.5 | gpt-5.6-luna | OpenAI 키 없이도 동작 |

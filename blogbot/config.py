@@ -39,7 +39,9 @@ def enforce_model(model_id: str) -> str:
     return model_id or CLAUDE_MODEL
 
 
-MODEL = enforce_model(os.getenv("BLOG_MODEL", CLAUDE_MODEL))
+# 글쓰기 기본 모델 (2026-11-22 사용자 결정: 무료인 EXAONE을 기본으로). EXAONE 키가 없으면 아래에서 Haiku로 바꾼다.
+DEFAULT_WRITE_MODEL = "k-exaone_v2.5"
+MODEL = enforce_model(os.getenv("BLOG_MODEL", DEFAULT_WRITE_MODEL))
 
 # Anthropic 크레딧 부족 등으로 Claude를 못 쓸 때 자동 전환할 모델.
 # kimi-k3는 한글 오타가 잦고 그때는 교정(Claude)도 못 쓰므로 오타가 적은 k2.6을 쓴다.
@@ -165,7 +167,7 @@ def cloudflare_ready() -> bool:
 # Claude는 Haiku 하나만 노출한다 (상위 모델은 비용 때문에 사용 안 함).
 AVAILABLE_MODELS = [
     # Claude (Anthropic) — 한글 오타가 없어 교정 패스 불필요
-    ("claude-haiku-5-5", "Haiku 5.5 · 가장 저렴·빠름 (기본)"),
+    ("claude-haiku-5-5", "Haiku 5.5 · 저렴·빠름(약 1분)"),
     # Kimi (Moonshot AI) — KIMI_API_KEY 미설정 시 GUI가 자동 비활성.
     # 계정별로 접근 가능한 모델이 다르니 https://api.moonshot.ai/v1/models 로 확인.
     ("kimi-k3", "Kimi K3 · Moonshot 최신 (한글 오타 있음, 자동 교정)"),
@@ -173,7 +175,7 @@ AVAILABLE_MODELS = [
     ("kimi-k2.7-code", "Kimi K2.7 Code · 구조화 출력 특화"),
     ("kimi-k2.7-code-highspeed", "Kimi K2.7 Code 고속"),
     # EXAONE (LG AI연구원) — EXAONE_API_KEY 미설정 시 GUI가 자동 비활성.
-    ("k-exaone_v2.5", "K-EXAONE 2.5 · LG AI연구원 한국어 모델"),
+    ("k-exaone_v2.5", "K-EXAONE 2.5 · 무료·한국어 (기본, 약 6분 · 과부하 시 Haiku로 자동 전환)"),
 ]
 
 
@@ -183,6 +185,13 @@ def is_kimi_model(model_id: str) -> bool:
 
 def is_exaone_model(model_id: str) -> bool:
     return (model_id or "").lower().startswith(("k-exaone", "exaone"))
+
+
+# 기본 글쓰기 모델의 키가 없으면 Haiku로 (EXAONE 키는 보조 .env에서 늦게 읽히므로 여기서 판단)
+if is_exaone_model(MODEL) and not EXAONE_API_KEY:
+    MODEL = CLAUDE_MODEL
+if is_kimi_model(MODEL) and not KIMI_API_KEY:
+    MODEL = CLAUDE_MODEL
 
 # 독자 설정 (2026-10-28 사용자 결정): 출퇴근 시간대(06~09시, 18~22시)에 자동 예약을 시작하면 직장인,
 # 그 외에는 여성 독자. 문체는 prompts/style_guide.md(여성) / prompts/audience_worker.md(직장인 페르소나 대체).
