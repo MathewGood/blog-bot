@@ -137,7 +137,8 @@ def pick_best_image(section_text: str, candidates: list) -> tuple:
         )
         resp = client.messages.create(
             model=config.IMAGE_PICK_MODEL,
-            max_tokens=300,
+            max_tokens=1200,
+            **config.claude_opts(config.IMAGE_PICK_MODEL),
             messages=[{"role": "user", "content": content}],
         )
         text = "".join(b.text for b in resp.content if b.type == "text")

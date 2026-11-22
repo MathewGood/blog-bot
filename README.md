@@ -128,10 +128,20 @@ OpenClaw이 글감 검색 → 기사 확보 → `inbox/`에 저장 → 생성 �
 
 ## 비용 참고
 
-기본 모델은 `claude-opus-4-8`($5/$25 per 1M tokens)입니다. 글 1편에
-대략 수천~1만 토큰 수준이며, 시스템 프롬프트는 캐싱되어 반복 실행 시
-비용이 절감됩니다. 더 저렴하게 쓰려면 `.env`에서
-`BLOG_MODEL=claude-sonnet-5`로 바꾸세요.
+가성비 기준 구성(2026-11-22). 단가는 100만 토큰당 입력/출력.
+
+| 단계 | 1순위 | 대체 | 비고 |
+|---|---|---|---|
+| 검색어 만들기·조사 브리프 | Haiku 5.5 ($0.10/$0.50) | Kimi K2.6 ($0.95/$4) | 브리프를 Kimi 우선에서 Haiku 우선으로 바꿈 |
+| 웹 검색 | Kimi Search Pro (호출당 약 $0.003) | Haiku 웹 검색 ($10/1000회) | 자동 예약 소재 검색은 6시간 캐시 |
+| 글쓰기(기본) | Haiku 5.5 · effort medium | — | 편당 약 $0.01. EXAONE(무료)·Kimi는 선택 가능 |
+| EXAONE 과부하 시 | Haiku 5.5 | Kimi K2.6 | Kimi로 쓴 글만 교정 단계를 거침 |
+| 제목·요약·표·교정·사진 고르기 | Haiku 5.5 · effort low | Kimi K2.6 | |
+| 사실 검증·사진 프롬프트 | Haiku 5.5 | gpt-5.6-luna | OpenAI 키 없이도 동작 |
+| 사진 | Cloudflare FLUX (하루 무료 할당, 4스텝) | 무료 스톡 | OpenAI 이미지(유료)는 고를 때만 |
+
+`claude-*` 모델은 무엇을 넣어도 `CLAUDE_MODEL`(Haiku 5.5)로 고정됩니다. 생각(thinking)의 양은
+`CLAUDE_EFFORT_LIGHT`(기본 low)·`CLAUDE_EFFORT_WRITE`(기본 medium)로 조절합니다.
 
 ## 판 인기글 — 발췌 + 사회적 관점 해설
 판 인기글은 각색하지 않고, 원문에서 짧은 발췌문 3~4개(닉네임·지역·연락처 등은 ○○로 가림)를 인용 블록으로 넣은 뒤

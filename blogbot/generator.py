@@ -325,8 +325,9 @@ def ensure_highlights(post: dict) -> dict:
     if llm_guard.anthropic_available():
         try:
             client = anthropic.Anthropic(timeout=60.0, max_retries=1)
-            resp = client.messages.create(model=config.CLAUDE_MODEL, max_tokens=1200,
-                                          messages=[{"role": "user", "content": prompt}])
+            resp = client.messages.create(model=config.CLAUDE_MODEL, max_tokens=2500,
+                                          messages=[{"role": "user", "content": prompt}],
+                                          **config.claude_opts())
             text = "".join(b.text for b in resp.content if b.type == "text")
         except Exception as e:
             if llm_guard.is_credit_error(e):
@@ -371,14 +372,29 @@ def _generate_post(
                 article_text, category_ko, extra_note, selected_model, research_brief
             )
         except ProviderBusy as e:
-            # 재시도(최대 약 6분)로도 EXAONE이 풀리지 않으면 글 한 편이 통째로 실패하지 않게 Kimi로 대신 쓴다
-            if not config.KIMI_API_KEY:
+            # 재시도로도 EXAONE이 풀리지 않으면 글 한 편이 통째로 실패하지 않게 대신 쓴다.
+            # 1순위 Haiku 5.5(가장 저렴·교정 불필요), Claude를 못 쓰면 Kimi.
+            reason = f"EXAONE 서비스 과부하: {str(e)[:80]}"
+            if config.ANTHROPIC_API_KEY and llm_guard.anthropic_available():
+                try:
+                    post = _generate_with_claude(
+                        article_text, category_ko, extra_note, config.CLAUDE_MODEL, research_brief
+                    )
+                    post = _expand_if_short(post, config.CLAUDE_MODEL, research_brief,
+                                            material_chars=len(article_text or "") + len(research_brief or ""))
+                    post["fallback_from"], post["fallback_reason"] = selected_model, reason
+                    return post
+                except Exception as ce:
+                    if llm_guard.is_credit_error(ce):
+                        llm_guard.mark_credit_out("Anthropic 크레딧 부족")
+                    if not config.KIMI_API_KEY:
+                        raise
+            elif not config.KIMI_API_KEY:
                 raise
             post = _generate_with_kimi(
                 article_text, category_ko, extra_note, config.FALLBACK_MODEL, research_brief
             )
-            post["fallback_from"] = selected_model
-            post["fallback_reason"] = f"EXAONE 서비스 과부하: {str(e)[:80]}"
+            post["fallback_from"], post["fallback_reason"] = selected_model, reason
             return post
 
     # Kimi/Moonshot 분기 — Anthropic 클라이언트 초기화조차 하지 않음
@@ -458,7 +474,8 @@ def _expand_if_short(post: dict, selected_model: str, research_brief: str | None
                 max_tokens=32000,
                 system=[{"type": "text", "text": _system_prompt(),
                          "cache_control": {"type": "ephemeral"}}],
-                output_config={"format": {"type": "json_schema", "schema": POST_SCHEMA}},
+                **config.claude_opts(selected_model, config.CLAUDE_EFFORT_WRITE,
+                                     {"type": "json_schema", "schema": POST_SCHEMA}),
                 messages=[{"role": "user", "content": _expand_prompt(post, research_brief)}],
             )
             text = next(b.text for b in resp.content if b.type == "text")
@@ -515,9 +532,8 @@ def _generate_with_claude(
                 "cache_control": {"type": "ephemeral"},
             }
         ],
-        output_config={
-            "format": {"type": "json_schema", "schema": POST_SCHEMA},
-        },
+        **config.claude_opts(selected_model, config.CLAUDE_EFFORT_WRITE,
+                             {"type": "json_schema", "schema": POST_SCHEMA}),
         messages=[{"role": "user", "content": user_msg}],
     )
     if supports_adaptive_thinking:

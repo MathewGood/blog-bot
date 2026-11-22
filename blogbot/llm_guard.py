@@ -101,9 +101,12 @@ def note_provider_error(name: str, status_code: int, text: str) -> str:
         now = time.time()
         label = PROVIDER_LABEL.get(name, name)
         reason = (f"{label} 크레딧(한도) 소진" if kind == "credit" else f"{label} API 키 오류")
+        until = now + _PROVIDER_COOLDOWN[kind]
+        if name == "cloudflare" and kind == "credit":
+            until = (now // 86400 + 1) * 86400 + 60   # 하루 무료 할당은 UTC 0시에 초기화
+            reason = "Cloudflare 오늘 무료 할당 소진 (한국 시각 09시 초기화)"
         with _lock:
-            _prov[name] = {"kind": kind, "until": now + _PROVIDER_COOLDOWN[kind],
-                           "reason": reason, "at": now}
+            _prov[name] = {"kind": kind, "until": until, "reason": reason, "at": now}
     return kind
 
 

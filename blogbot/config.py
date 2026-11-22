@@ -10,13 +10,30 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
 UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "")
 NAVER_BLOG_ID = os.getenv("NAVER_BLOG_ID", "")
-# Claude는 Haiku 4.5만 사용한다 (토큰 비용 절감 — 사용자 결정 2026-09-19).
-# .env나 요청에 Sonnet/Opus 등이 들어와도 enforce_model()이 Haiku로 바꾼다.
-CLAUDE_MODEL = "claude-haiku-4-5"
+# Claude는 Haiku만 사용한다 (토큰 비용 절감 — 사용자 결정 2026-09-19).
+# 2026-11-22: Haiku 4.5($1/$5) → Haiku 5.5($0.10/$0.50, 100만 토큰당 · 프롬프트 10만 토큰 이하)로 교체 — 단가 1/10.
+# .env나 요청에 Sonnet/Opus·Haiku 4.5 등이 들어와도 enforce_model()이 이 모델로 바꾼다.
+CLAUDE_MODEL = "claude-haiku-5-5"
+# Haiku 5.5는 생각(thinking)이 기본으로 켜져 있다 — effort로 양을 조절한다.
+# 짧은 JSON 작업(검색어·제목·요약·교정·사진 고르기)은 low, 글쓰기·사실 검증은 medium.
+CLAUDE_EFFORT_LIGHT = os.getenv("CLAUDE_EFFORT_LIGHT", "low")
+CLAUDE_EFFORT_WRITE = os.getenv("CLAUDE_EFFORT_WRITE", "medium")
+_NO_EFFORT_MODELS = ("claude-haiku-4-5",)   # effort 파라미터를 받지 않는(400) 모델
+
+
+def claude_opts(model: str = "", effort: str = "", fmt: dict = None) -> dict:
+    """messages.create에 넘길 output_config(effort·format) 묶음."""
+    oc = {}
+    m = model or CLAUDE_MODEL
+    if effort != "none" and not m.startswith(_NO_EFFORT_MODELS):
+        oc["effort"] = effort or CLAUDE_EFFORT_LIGHT
+    if fmt:
+        oc["format"] = fmt
+    return {"output_config": oc} if oc else {}
 
 
 def enforce_model(model_id: str) -> str:
-    """Claude 계열이면 무조건 Haiku 4.5로 고정. Kimi 등 다른 계열은 그대로."""
+    """Claude 계열이면 무조건 CLAUDE_MODEL(Haiku)로 고정. Kimi 등 다른 계열은 그대로."""
     if model_id and model_id.startswith("claude") and model_id != CLAUDE_MODEL:
         return CLAUDE_MODEL
     return model_id or CLAUDE_MODEL
@@ -116,11 +133,15 @@ MAX_IMAGES = 4
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
 CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
 CF_IMAGE_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell")
+# schnell은 1~4스텝용으로 만든 모델 — 8스텝은 뉴런만 더 쓴다(장당 ≈96→58뉴런, 하루 무료 ≈100→170장)
+CF_IMAGE_STEPS = int(os.getenv("CF_IMAGE_STEPS", "4"))
 IMAGE_PROVIDERS = (("openai", "AI 생성 (OpenAI)"),
                    ("cloudflare", "AI 생성 무료 (Cloudflare FLUX)"),
                    ("stock", "무료 스톡 사진 (Pexels·Pixabay)"))
-IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "openai")
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "cloudflare")
 if IMAGE_PROVIDER == "openai" and not OPENAI_API_KEY:
+    IMAGE_PROVIDER = "stock"
+if IMAGE_PROVIDER == "cloudflare" and not (os.getenv("CLOUDFLARE_ACCOUNT_ID") and os.getenv("CLOUDFLARE_API_TOKEN")):
     IMAGE_PROVIDER = "stock"
 
 
@@ -141,10 +162,10 @@ def cloudflare_ready() -> bool:
 
 
 # GUI 드롭다운·CLI 검증에 쓰는 모델 카탈로그. (id, 한글 설명)
-# Claude는 Haiku 4.5 하나만 노출한다 (상위 모델은 비용 때문에 사용 안 함).
+# Claude는 Haiku 하나만 노출한다 (상위 모델은 비용 때문에 사용 안 함).
 AVAILABLE_MODELS = [
     # Claude (Anthropic) — 한글 오타가 없어 교정 패스 불필요
-    ("claude-haiku-4-5", "Haiku 4.5 · 저렴·빠름 (기본)"),
+    ("claude-haiku-5-5", "Haiku 5.5 · 가장 저렴·빠름 (기본)"),
     # Kimi (Moonshot AI) — KIMI_API_KEY 미설정 시 GUI가 자동 비활성.
     # 계정별로 접근 가능한 모델이 다르니 https://api.moonshot.ai/v1/models 로 확인.
     ("kimi-k3", "Kimi K3 · Moonshot 최신 (한글 오타 있음, 자동 교정)"),

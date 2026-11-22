@@ -54,7 +54,7 @@ _SYSTEM = """너는 한국어 교정자다. 입력된 블로그 글에서 다음
 
 고칠 것이 없는 필드는 원문 그대로 반환한다. 입력과 동일한 JSON 구조로만 답한다."""
 
-_PROOFREAD_MODEL = "claude-haiku-4-5"
+_PROOFREAD_MODEL = config.CLAUDE_MODEL
 
 
 def proofread_post(post: dict) -> tuple:
@@ -84,7 +84,7 @@ def proofread_post(post: dict) -> tuple:
             model=_PROOFREAD_MODEL,
             max_tokens=32000,
             system=_SYSTEM,
-            output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
+            **config.claude_opts(_PROOFREAD_MODEL, fmt={"type": "json_schema", "schema": _SCHEMA}),
             messages=[
                 {
                     "role": "user",

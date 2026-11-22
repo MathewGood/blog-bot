@@ -138,8 +138,9 @@ def _ask(prompt: str) -> str:
     if llm_guard.anthropic_available():
         try:
             client = anthropic.Anthropic(timeout=90.0, max_retries=1)
-            resp = client.messages.create(model=config.CLAUDE_MODEL, max_tokens=2500,
-                                          messages=[{"role": "user", "content": prompt}])
+            resp = client.messages.create(model=config.CLAUDE_MODEL, max_tokens=4000,
+                                          messages=[{"role": "user", "content": prompt}],
+                                          **config.claude_opts())
             text = "".join(b.text for b in resp.content if b.type == "text")
         except Exception as e:
             if llm_guard.is_credit_error(e):

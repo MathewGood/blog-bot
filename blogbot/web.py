@@ -1735,7 +1735,7 @@ def api_anthropic_recheck():
         return jsonify({"ok": False, "reason": "ANTHROPIC_API_KEY 없음"})
     try:
         _a.Anthropic().messages.create(
-            model="claude-haiku-4-5", max_tokens=1,
+            model=config.CLAUDE_MODEL, max_tokens=1,
             messages=[{"role": "user", "content": "ping"}],
         )
         llm_guard.mark_ok()

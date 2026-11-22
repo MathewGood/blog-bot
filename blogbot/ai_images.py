@@ -88,9 +88,26 @@ def _cost(model: str, usage: dict) -> float:
     return (usage.get("input_tokens", 0) * pin + usage.get("output_tokens", 0) * pout) / 1e6
 
 
+def _spec_with_haiku(instructions: str, user: str) -> tuple:
+    import anthropic
+
+    resp = anthropic.Anthropic(timeout=60.0, max_retries=1).messages.create(
+        model=config.CLAUDE_MODEL, max_tokens=1500, system=instructions,
+        messages=[{"role": "user", "content": user + "\nJSON only."}], **config.claude_opts())
+    text = "".join(b.text for b in resp.content if b.type == "text")
+    import re as _re
+
+    m = _re.search(r"\{.*\}", text, _re.S)
+    spec = json.loads(m.group(0)) if m else {}
+    if not spec.get("prompt"):
+        raise RuntimeError("프롬프트가 비어 있음")
+    cost = (resp.usage.input_tokens * 0.10 + resp.usage.output_tokens * 0.50) / 1e6
+    return spec, cost
+
+
 def write_spec(section_text: str, title: str, category: str, planned_caption: str = "",
                audience: str = "women") -> tuple:
-    """문단 → ({prompt, caption}, 비용$). Luna 호출이 실패하면 예외."""
+    """문단 → ({prompt, caption}, 비용$). Haiku 5.5 우선(가장 저렴), 못 쓰면 Luna. 둘 다 실패하면 예외."""
     style = _STYLE[_style_key(category)]
     instructions = (
         "You design one image for a section of a Korean long-form magazine blog post.\n"
@@ -107,6 +124,14 @@ def write_spec(section_text: str, title: str, category: str, planned_caption: st
         f"Planned caption idea: {planned_caption}\n"
         f"Paragraph:\n{section_text[:1500]}"
     )
+    if config.ANTHROPIC_API_KEY and llm_guard.anthropic_available():
+        try:
+            return _spec_with_haiku(instructions, user)
+        except Exception:
+            if not config.OPENAI_API_KEY:
+                raise
+    if not config.OPENAI_API_KEY or llm_guard.provider_blocked("openai"):
+        raise RuntimeError("사진 프롬프트를 쓸 모델이 없음")
     r = requests.post(f"{API}/responses", headers=_headers(), timeout=60, json={
         "model": config.OPENAI_PROMPT_MODEL,
         "reasoning": {"effort": "none"},
@@ -162,7 +187,7 @@ def draw_cloudflare(prompt: str, dest: Path) -> float:
            f"/ai/run/{config.CF_IMAGE_MODEL}")
     r = requests.post(url, timeout=120, headers={
         "Authorization": f"Bearer {config.CLOUDFLARE_API_TOKEN}"},
-        json={"prompt": prompt[:2048], "steps": 8})
+        json={"prompt": prompt[:2048], "steps": config.CF_IMAGE_STEPS})
     if r.status_code != 200:
         msg = r.text[:200]
         try:
@@ -191,8 +216,6 @@ def make_one(section_text: str, title: str, category: str, plan: dict, dest: Pat
     """사진 1장 생성 → {caption, cost, seconds, engine}. 실패하면 예외."""
     t = time.time()
     try:
-        if not config.OPENAI_API_KEY:
-            raise RuntimeError("OpenAI 키 없음 — 계획된 검색어로 그림")
         spec, c1 = write_spec(section_text, title, category, plan.get("caption", ""), audience)
     except Exception:
         # 프롬프트 작성이 실패해도 계획된 검색어·캡션으로 그린다

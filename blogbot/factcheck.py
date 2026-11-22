@@ -4,10 +4,10 @@ Haiku는 분량을 채우거나 문장을 매끄럽게 하면서 자료에 없�
 기억에 기대 덧붙이는 경향이 있다 (2026-10-04 실측: "거란 1000년 제국",
 "금 마지막 황제가 남경에서 자살" — 실제는 약 210년, 채주).
 
-동작: gpt-5.6-luna(100만 토큰 문맥, 저렴)에 자료와 글을 함께 주고
+동작: Haiku 5.5(100만 토큰 문맥, 가장 저렴 — 못 쓰면 gpt-5.6-luna)에 자료와 글을 함께 주고
   · 구체적 사실(연도·수치·기간·장소·인물·인과·최상급)이 자료에 없거나 어긋나는 문장을 찾아
   · 자료에 맞게 고친 문장(또는 삭제)을 받아 그대로 치환한다.
-의견·해석·문체는 건드리지 않는다. OpenAI 키가 없으면 Haiku로 같은 일을 한다.
+의견·해석·문체는 건드리지 않는다.
 """
 
 from __future__ import annotations
@@ -85,7 +85,8 @@ def _ask_haiku(sources: str, post_text: str) -> list:
 
     client = anthropic.Anthropic(timeout=180.0, max_retries=1)
     resp = client.messages.create(
-        model=config.CLAUDE_MODEL, max_tokens=8000, system=_instructions(),
+        model=config.CLAUDE_MODEL, max_tokens=12000, system=_instructions(),
+        **config.claude_opts(effort=config.CLAUDE_EFFORT_WRITE),
         messages=[{"role": "user", "content":
                    "JSON만 출력: {\"issues\": [{\"quote\", \"problem\", \"fix\"}]}\n\n"
                    f"<SOURCES>\n{sources}\n</SOURCES>\n\n<POST>\n{post_text}\n</POST>"}])
@@ -100,7 +101,22 @@ def check(post: dict, article_text: str, research_brief: str | None = None) -> t
     if len(sources) < 300:
         return post, []
     post_text = _post_text(post)
-    issues = (_ask_luna if config.OPENAI_API_KEY else _ask_haiku)(sources, post_text)
+    # Haiku 5.5 우선(Luna 대비 입력 1/2·출력 1/2.4 단가, 100만 토큰 문맥). Claude를 못 쓰면 Luna.
+    from . import llm_guard
+    order = [f for f, ok in ((_ask_haiku, bool(config.ANTHROPIC_API_KEY) and llm_guard.anthropic_available()),
+                             (_ask_luna, bool(config.OPENAI_API_KEY) and not llm_guard.provider_blocked("openai")))
+             if ok]
+    if not order:
+        raise RuntimeError("사실 검증에 쓸 모델이 없음 (Anthropic·OpenAI 모두 사용 불가)")
+    err = None
+    for ask in order:
+        try:
+            issues = ask(sources, post_text)
+            break
+        except Exception as e:   # 한쪽이 실패하면 다른 쪽으로
+            err = e
+    else:
+        raise err
 
     out = dict(post)
     out["sections"] = [dict(s) for s in post.get("sections", [])]

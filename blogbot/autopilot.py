@@ -152,6 +152,30 @@ def split_geo(n: int) -> dict:
     return out
 
 
+# 소재 고르기용 '관련 뉴스 제목' 검색 결과를 잠시 재사용한다 — 자동 예약을 하루 여러 번 돌리면
+# 같은 트렌드 키워드를 매번 다시 검색해(실행당 약 40회 × $0.003) 검색 비용의 1/3을 차지했다(2026-11 실측).
+_TITLE_CACHE: dict = {}
+_TITLE_TTL = 6 * 3600
+
+
+def _recent_titles(query: str) -> list:
+    """최근 14일 뉴스 제목 3개 (Kimi Search Pro, 6시간 캐시). 실패하면 빈 목록."""
+    import time as _t
+
+    from . import kimi_search
+
+    hit = _TITLE_CACHE.get(query)
+    if hit and _t.time() - hit[0] < _TITLE_TTL:
+        return hit[1]
+    try:
+        titles = [h.get("title", "") for h in (kimi_search.search_pro(query, days=14) or [])[:3] if h.get("title")]
+    except Exception:
+        return []
+    if titles:
+        _TITLE_CACHE[query] = (_t.time(), titles)
+    return titles
+
+
 def _trend_candidates(log, geo: str = "KR") -> list:
     """구글 트렌드(4시간 기준) 1~20위 + 각 키워드의 관련 뉴스 제목(맥락). geo: KR | JP | US."""
     from . import kimi_search, trends
@@ -170,12 +194,8 @@ def _trend_candidates(log, geo: str = "KR") -> list:
     def news(it):
         if not config.KIMI_API_KEY:
             return it["related"]
-        try:
-            q = f"{it['term']} 최근 이슈" if geo == "KR" else f"{it['term']} latest news"
-            hits = kimi_search.search_pro(q, days=14) or []
-            return [h.get("title", "") for h in hits[:3] if h.get("title")] or it["related"]
-        except Exception:
-            return it["related"]
+        q = f"{it['term']} 최근 이슈" if geo == "KR" else f"{it['term']} latest news"
+        return _recent_titles(q) or it["related"]
 
     import concurrent.futures as cf
 
@@ -205,10 +225,7 @@ def _find_overlap(google: list, daum: list, log) -> list:
     if daum and config.KIMI_API_KEY:
         try:
             def dctx(d):
-                try:
-                    return [h.get("title", "") for h in (kimi_search.search_pro(f"{d['term']} 최근 이슈", days=14) or [])[:3]]
-                except Exception:
-                    return []
+                return _recent_titles(f"{d['term']} 최근 이슈")
 
             import concurrent.futures as cf
 

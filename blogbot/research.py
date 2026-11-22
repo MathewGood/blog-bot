@@ -139,8 +139,9 @@ def _make_queries(article_text: str, category_ko: str,
                 client = anthropic.Anthropic(timeout=60.0, max_retries=1)
                 try:
                     resp = client.messages.create(
-                        model=config.CLAUDE_MODEL, max_tokens=1000,
+                        model=config.CLAUDE_MODEL, max_tokens=2000,
                         system=(system or _QUERY_SYSTEM) + config.time_note(queries=True),
+                        **config.claude_opts(),
                         messages=[{"role": "user", "content": user}])
                 except Exception as e:
                     usage_log.record("claude", "queries", config.CLAUDE_MODEL, ok=False, note=str(e)[:80])
@@ -186,8 +187,12 @@ def _research_with_search_api(article_text: str, category_ko: str, log=None) -> 
     user = (f"카테고리: {category_ko}\n\n<article>\n{article_text[:5000]}\n</article>\n\n"
             f"<sources>\n{kimi_search.sources_block(sources)}\n</sources>\n\n"
             "위 자료로 리서치 브리프를 작성하라.")
-    # 작성은 Kimi 우선, 막히면 Haiku
-    for model in (KIMI_RESEARCH_MODELS[-1], config.CLAUDE_MODEL):
+    # 작성은 Haiku 5.5 우선(Kimi K2.6 대비 입력 1/9·출력 1/8 단가, 한글 깨짐 없음), 막히면 Kimi
+    from . import llm_guard as _lg
+    order = ((config.CLAUDE_MODEL, KIMI_RESEARCH_MODELS[-1])
+             if config.ANTHROPIC_API_KEY and _lg.anthropic_available()
+             else (KIMI_RESEARCH_MODELS[-1], config.CLAUDE_MODEL))
+    for model in order:
         try:
             if model.startswith("kimi"):
                 if not config.KIMI_API_KEY:
@@ -199,7 +204,8 @@ def _research_with_search_api(article_text: str, category_ko: str, log=None) -> 
                 client = anthropic.Anthropic(timeout=180.0, max_retries=1)
                 try:
                     resp = client.messages.create(
-                        model=model, max_tokens=8000, system=_COMPOSE_SYSTEM + config.time_note(),
+                        model=model, max_tokens=12000, system=_COMPOSE_SYSTEM + config.time_note(),
+                        **config.claude_opts(model),
                         messages=[{"role": "user", "content": user}])
                 except Exception as e:
                     usage_log.record("claude", "brief", model, ok=False, note=str(e)[:80])
@@ -533,8 +539,8 @@ def _claude_search_loop(client, used_model, user_msg, messages, deadline, tot):
         try:
             with client.messages.stream(
                 model=used_model,
-                max_tokens=8000,
-                # Haiku 4.5는 adaptive thinking·effort 파라미터를 지원하지 않는다(400 오류)
+                max_tokens=12000,
+                **config.claude_opts(used_model),
                 # 20260209 버전은 결과 필터링용 코드 실행을 수십 회 끼워 넣어 82~467초로
                 # 들쭉날쭉했다. 기본 버전은 38~51초로 일정하고 브리프 품질도 동등(실측).
                 tools=[{

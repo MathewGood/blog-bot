@@ -20,7 +20,7 @@ LOG_FILE = config.ROOT / "usage_log.jsonl"
 KEEP_DAYS = 60   # 이보다 오래된 줄은 집계 때 무시하고, 가끔 파일에서 정리한다
 
 # 단가 (2026-10 공식 가격표). Kimi는 계정 잔액 API로 따로 보므로 횟수만 센다.
-_CLAUDE_PRICE = {"claude-haiku-4-5": (1.00, 5.00)}   # $/1M (입력, 출력)
+_CLAUDE_PRICE = {"claude-haiku-4-5": (1.00, 5.00), "claude-haiku-5-5": (0.10, 0.50)}   # $/1M (입력, 출력)
 _WEB_SEARCH_PRICE = 10.0 / 1000                       # $/회
 
 PURPOSE_LABEL = {
@@ -129,7 +129,7 @@ def _prune():
 
 
 def claude_cost(model: str, in_tok: int, out_tok: int, searches: int) -> float:
-    pin, pout = _CLAUDE_PRICE.get(model, _CLAUDE_PRICE["claude-haiku-4-5"])
+    pin, pout = _CLAUDE_PRICE.get(model, _CLAUDE_PRICE["claude-haiku-5-5"])
     return (in_tok * pin + out_tok * pout) / 1e6 + searches * _WEB_SEARCH_PRICE
 
 
