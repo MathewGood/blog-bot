@@ -743,13 +743,13 @@ async function loadStatus() {
   // 사진 공급원 드롭다운 (OpenAI 키가 없으면 AI 생성은 비활성)
   const imgSel = $("#genImages");
   if (imgSel) {
-    let saved = null; try { saved = localStorage.getItem("imageProvider"); } catch (e) {}
+    let saved = null; try { saved = localStorage.getItem("imageProvider2"); } catch (e) {}
     imgSel.innerHTML = (c.image_providers || []).map(p => {
       const off = p.id === "openai" && !c.openai_key;
       const sel = (saved || c.image_provider) === p.id && !off;
       return `<option value="${p.id}"${sel ? " selected" : ""}${off ? " disabled" : ""}>📷 ${p.label}${off ? " · 키 없음" : ""}</option>`;
     }).join("");
-    imgSel.onchange = () => { try { localStorage.setItem("imageProvider", imgSel.value); } catch (e) {} };
+    imgSel.onchange = () => { try { localStorage.setItem("imageProvider2", imgSel.value); } catch (e) {} };
   }
   // LAN 모드에서만 배너 표시
   if (c.lan_url || c.tailscale_url) {

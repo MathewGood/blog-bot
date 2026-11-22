@@ -137,12 +137,13 @@ CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "")
 CF_IMAGE_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell")
 # schnell은 1~4스텝용으로 만든 모델 — 8스텝은 뉴런만 더 쓴다(장당 ≈96→58뉴런, 하루 무료 ≈100→170장)
 CF_IMAGE_STEPS = int(os.getenv("CF_IMAGE_STEPS", "4"))
-IMAGE_PROVIDERS = (("openai", "AI 생성 (OpenAI)"),
+IMAGE_PROVIDERS = (("openai", "AI 생성 (OpenAI · 장당 약 $0.01)"),
                    ("cloudflare", "AI 생성 무료 (Cloudflare FLUX)"),
                    ("stock", "무료 스톡 사진 (Pexels·Pixabay)"))
-IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "cloudflare")
+# 사진 기본 공급원 (2026-11-22 사용자 결정: OpenAI — 실측 장당 약 $0.01). 실패하면 Cloudflare(무료) → 스톡 순으로 대체.
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "openai")
 if IMAGE_PROVIDER == "openai" and not OPENAI_API_KEY:
-    IMAGE_PROVIDER = "stock"
+    IMAGE_PROVIDER = "cloudflare"
 if IMAGE_PROVIDER == "cloudflare" and not (os.getenv("CLOUDFLARE_ACCOUNT_ID") and os.getenv("CLOUDFLARE_API_TOKEN")):
     IMAGE_PROVIDER = "stock"
 

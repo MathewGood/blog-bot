@@ -138,7 +138,7 @@ OpenClaw이 글감 검색 → 기사 확보 → `inbox/`에 저장 → 생성 �
 | EXAONE 과부하 시 | Haiku 5.5 | Kimi K2.6 | Kimi로 쓴 글만 교정 단계를 거침 |
 | 제목·요약·표·교정·사진 고르기 | Haiku 5.5 · effort low | Kimi K2.6 | |
 | 사실 검증·사진 프롬프트 | Haiku 5.5 | gpt-5.6-luna | OpenAI 키 없이도 동작 |
-| 사진 | Cloudflare FLUX (하루 무료 할당, 4스텝) | 무료 스톡 | OpenAI 이미지(유료)는 고를 때만 |
+| 사진 | OpenAI gpt-image-2.5-flare (장당 약 $0.01, 편당 약 $0.04) | Cloudflare FLUX(무료) → 무료 스톡 | `.env`의 `IMAGE_PROVIDER`로 변경 |
 
 `claude-*` 모델은 무엇을 넣어도 `CLAUDE_MODEL`(Haiku 5.5)로 고정됩니다. 생각(thinking)의 양은
 `CLAUDE_EFFORT_LIGHT`(기본 low)·`CLAUDE_EFFORT_WRITE`(기본 medium)로 조절합니다.
