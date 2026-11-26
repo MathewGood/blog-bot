@@ -134,14 +134,14 @@ def _esc(s) -> str:
 
 
 def summary_block(post: dict) -> tuple:
-    """(html, md) — 글 맨 끝(출처 앞) 30초 요약 카드."""
+    """(html, md) — 글 맨 끝(출처 앞) 세줄 요약 카드."""
     items = [str(x).strip() for x in post.get("summary") or [] if str(x).strip()]
     if not items:
         return "", ""
     marks = "①②③④⑤"
-    html = ('<div class="box sum"><p class="bt">30초 요약</p>'
+    html = ('<div class="box sum"><p class="bt">세줄 요약</p>'
             + "".join(f"<p>{marks[i]} {_esc(t)}</p>" for i, t in enumerate(items[:5])) + "</div>")
-    md_ = "> **30초 요약**\n" + "\n".join(f"> {marks[i]} {t}" for i, t in enumerate(items[:5])) + "\n"
+    md_ = "> **세줄 요약**\n" + "\n".join(f"> {marks[i]} {t}" for i, t in enumerate(items[:5])) + "\n"
     return html, md_
 
 
@@ -166,15 +166,8 @@ def table_block(table: dict) -> tuple:
 
 
 def closing_block(post: dict) -> tuple:
-    c = post.get("closing") or {}
-    q = (c.get("question") or "").strip()
-    if not q:
-        return "", ""
-    html = '<div class="box end">'
-    md_ = ""
-    html += f"<p>{_esc(q)}</p><p>생각이나 경험을 댓글로 남겨 주세요.</p>"
-    md_ += f"\n{q}\n생각이나 경험을 댓글로 남겨 주세요.\n"
-    return html + "</div>", md_
+    """글 끝 질문 상자 — 2026-11-27 사용자 지정으로 넣지 않는다(예전 초안의 closing도 무시)."""
+    return "", ""
 
 
 def split_first_para(body_md: str) -> tuple:
@@ -211,11 +204,8 @@ def _plain_copy_text(post: dict, image_metas: list[dict]) -> str:
         if i == tbl_at:
             parts.append("\n".join([" | ".join(map(str, tbl.get("headers", [])))] +
                                    [" | ".join(map(str, r)) for r in tbl.get("rows", [])]))
-    c = post.get("closing") or {}
-    if c.get("question"):
-        parts.append(c["question"])
     if post.get("summary"):
-        parts.append("30초 요약\n" + "\n".join(f"{'①②③④⑤'[i]} {t}" for i, t in enumerate(post["summary"][:5])))
+        parts.append("세줄 요약\n" + "\n".join(f"{'①②③④⑤'[i]} {t}" for i, t in enumerate(post["summary"][:5])))
 
     source_line = (post.get("source_line") or "").strip()
     if source_line:

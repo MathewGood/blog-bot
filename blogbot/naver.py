@@ -264,7 +264,7 @@ def _box(inner: str, style: str = _BOX_STYLE) -> str:
 
 
 def summary_html(post: dict) -> str:
-    """글 맨 끝(출처 앞) '30초 요약' 카드 (핵심 결론 3줄)."""
+    """글 맨 끝(출처 앞) '세줄 요약' 카드 (핵심 결론 3줄)."""
     from html import escape
 
     items = [str(x).strip() for x in post.get("summary") or [] if str(x).strip()]
@@ -273,7 +273,7 @@ def summary_html(post: dict) -> str:
     marks = "①②③④⑤"
     lines = "".join(f'<p style="{_BODY_STYLE}">{_normal(marks[i] + " " + escape(t))}</p>'
                     for i, t in enumerate(items[:5]))
-    head = f'<p style="font-size:16px;color:#1b7a3d"><b>30초 요약</b></p>'
+    head = f'<p style="font-size:16px;color:#1b7a3d"><b>세줄 요약</b></p>'
     return _box(head + lines)
 
 
@@ -1017,16 +1017,11 @@ def _publish_in(ctx, page_title, post, draft_dir, auto_publish, wait_min, _emit,
                 paste_html(h)
                 _focus_end(frame)
 
-    # 마무리 질문 (출처·태그 앞)
-    tail_box = closing_html(post)
-    if tail_box:
-        _emit("  · 마무리 질문 입력 중")
-        paste_html(tail_box)
-        _focus_end(frame)
-    # 30초 요약 카드 — 글의 맨 마지막 내용 (출처·태그 앞)
+    # (글 끝 질문 상자는 2026-11-27 사용자 지정으로 넣지 않는다)
+    # 세줄 요약 카드 — 글의 맨 마지막 내용 (출처·태그 앞)
     tail_sum = summary_html(post)
     if tail_sum:
-        _emit("  · 30초 요약 카드 입력 중")
+        _emit("  · 세줄 요약 카드 입력 중")
         paste_html(tail_sum)
         _focus_end(frame)
 

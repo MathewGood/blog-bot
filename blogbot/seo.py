@@ -1,4 +1,4 @@
-"""검색 노출·체류시간을 위한 마무리 단계 (제목 공식 · 30초 요약 · 비교표 · 질문 · 모바일 문단).
+"""검색 노출·체류시간을 위한 마무리 단계 (제목 공식 · 세줄 요약 · 비교표 · 모바일 문단).
 
 본문이 완성된 뒤(사실 검증·교정 이후) 한 번 호출한다. 본문 사실을 새로 만들지 않고
 이미 쓰인 내용을 다시 정리해 붙이므로, 요약·표의 숫자는 본문에 있는 것만 허용한다.
@@ -92,7 +92,7 @@ def split_paragraphs(post: dict, max_len: int = PARA_MAX, target: int = PARA_TAR
 # 2) LLM 한 번으로 제목·요약·표·질문 생성
 # ─────────────────────────────────────────────────────────────
 
-_PROMPT = """한국 네이버 블로그(독자: {audience}) 글이 완성됐다. 검색 노출과 체류시간을 위해 아래 4가지를 만든다.
+_PROMPT = """한국 네이버 블로그(독자: {audience}) 글이 완성됐다. 검색 노출과 체류시간을 위해 아래 항목을 만든다.
 본문에 없는 사실·숫자·고유명사는 절대 만들지 않는다. 본문에 이미 있는 내용을 다시 정리할 뿐이다.
 
 [현재 제목] {title}
@@ -113,19 +113,18 @@ _PROMPT = """한국 네이버 블로그(독자: {audience}) 글이 완성됐다.
    검색자가 함께 찾는 연관 낱말(방법·기준·조건·비용·이유·차이 중 본문에 맞는 것) 하나를 자연스럽게 넣는다. anchor의 낱말을 되풀이하지 않는다.
    금지: 충격·경악·난리 같은 낚시어, 물음표 남발, "내돈내산"·"직접 써 보니" 같은 필자 경험 암시, 효과·완치 보장,
    의약·건강 효능 단정. 불안을 자극하지 않는다.
-3. summary — '30초 요약' 3줄. 글의 핵심 결론 3가지를 각 25~60자, ~다 체로. 독자가 얻는 정보·행동 중심. 이 3줄만 읽어도 요지를 알 수 있어야 한다.
+3. summary — '세줄 요약' 3줄. 글의 핵심 결론 3가지를 각 25~60자, ~다 체로. 독자가 얻는 정보·행동 중심. 이 3줄만 읽어도 요지를 알 수 있어야 한다.
 4. table — 본문 내용을 정리한 표 1개. kind는 "compare"(비교 분석표) 또는 "checklist"(체크리스트).
    headers 2~3개, rows 3~6행, 각 칸 40자 이내. checklist면 첫 열에 점검 항목, 둘째 열에 확인할 내용을 쓴다.
    표에 쓰는 숫자는 반드시 본문에 있는 것만.
-5. question — 글 끝에서 독자의 의견·경험을 묻는 질문 한 문장(60자 이내, 물음표로 끝). 본문 주제와 직결되게.
-6. intro — 검색 결과 미리보기로 노출될 새 첫 문단 2문장({i0}~{i1}자, ~다 체, 관찰자 시점).
+5. intro — 검색 결과 미리보기로 노출될 새 첫 문단 2문장({i0}~{i1}자, ~다 체, 관찰자 시점).
    - 첫 문장 맨 앞쪽(앞 30자 안)에 anchor를 **한 글자도 바꾸지 말고 그대로** 넣고, "anchor은/는/이/가 ~다" 꼴로 이 글이 답하는 핵심(대상·조건·결론)을 쓴다.
    - 둘째 문장에는 독자가 이 글에서 얻을 정보를 구체적으로 쓴다. 태그의 연관 낱말을 한두 개 자연스럽게 섞되 anchor는 이 문단에서 두 번 넘게 쓰지 않는다.
    - 이 문단 바로 뒤에 [현재 첫 문단]이 이어진다. 그 문단과 같은 말을 되풀이하지 말고, 이어 읽어도 어색하지 않게 쓴다.
    - 숫자·고유명사는 본문에 있는 것만. 질문·낚시어·"알아보겠습니다" 같은 정형 서두·1인칭 금지.
 
 JSON만 출력:
-{{"anchor":"","hook":"","intro":"","summary":["","",""],"table":{{"kind":"compare","title":"표 제목(20자 이내)","headers":["",""],"rows":[["",""]]}},"question":""}}"""
+{{"anchor":"","hook":"","intro":"","summary":["","",""],"table":{{"kind":"compare","title":"표 제목(20자 이내)","headers":["",""],"rows":[["",""]]}}}}"""
 
 
 def _ask(prompt: str) -> str:
@@ -316,7 +315,7 @@ def finalize(post: dict, hint: str = "", log=None) -> dict:
         got = _validate(data, body)
         # 첫 문단은 현재 문단에 앵커가 이미 있으면 새로 만들 필요가 없다
         need_intro = not (got.get("anchor") and intro_has_anchor(intro_now, got["anchor"]))
-        missing = [k for k in ("title", "summary", "table", "question") if k not in got]
+        missing = [k for k in ("title", "summary", "table") if k not in got]
         if need_intro and "intro" not in got and "title" in got:
             missing.append("intro")
         if not missing:
@@ -372,7 +371,7 @@ def finalize(post: dict, hint: str = "", log=None) -> dict:
             emit(f"  ⚠ 첫 문단 검색어 삽입 실패 — 기존 첫 문단 유지")
     if got.get("summary"):
         post["summary"] = got["summary"]
-        emit("  ✓ 30초 요약 카드 3줄")
+        emit("  ✓ 세줄 요약 카드")
     else:
         emit("  ⚠ 요약 카드 생략 (본문에 없는 수치가 있거나 3줄이 안 나옴)")
     if got.get("table"):
@@ -381,9 +380,6 @@ def finalize(post: dict, hint: str = "", log=None) -> dict:
         emit(f"  ✓ {'체크리스트' if got['table']['kind'] == 'checklist' else '비교 분석표'} {len(got['table']['rows'])}행 삽입")
     else:
         emit("  ⚠ 표 생략 (본문에 없는 수치가 있거나 행이 부족)")
-    if got.get("question"):
-        post["closing"] = {"question": got["question"]}
-        emit("  ✓ 마무리 질문 1개")
-    else:
-        emit("  ⚠ 마무리 질문 생략")
+    # 2026-11-27 사용자 지정: 글 끝의 질문 상자(댓글 유도)는 넣지 않는다
+    post.pop("closing", None)
     return post
